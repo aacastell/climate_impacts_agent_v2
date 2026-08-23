@@ -70,6 +70,21 @@ class FrontendBuildProjectStack(Stack):
             ),
             environment=codebuild.BuildEnvironment(
                 build_image=codebuild.LinuxBuildImage.STANDARD_7_0,
+                # upload-frontend.sh / invalidate-cache.sh need the bucket
+                # name and distribution ID. Locally those come from
+                # infra/outputs.json, written by provision-infra.sh on the
+                # same machine — but that file is gitignored and never
+                # reaches this container's fresh checkout, so it's baked in
+                # here directly instead. CDK already knows both values at
+                # this point; no file handoff needed.
+                environment_variables={
+                    "FRONTEND_BUCKET_NAME": codebuild.BuildEnvironmentVariable(
+                        value=bucket.bucket_name
+                    ),
+                    "FRONTEND_DISTRIBUTION_ID": codebuild.BuildEnvironmentVariable(
+                        value=distribution.distribution_id
+                    ),
+                },
             ),
             build_spec=codebuild.BuildSpec.from_source_filename("frontend/buildspec.yml"),
         )
