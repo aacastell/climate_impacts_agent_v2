@@ -25,10 +25,17 @@ unexpectedly. This also matters across separate terminal sessions/commands, not 
 ## Commands
 
 ```sh
-npx aws-cdk synth      # render the CloudFormation template, no AWS calls
+npx aws-cdk synth      # render the CloudFormation templates
 npx aws-cdk diff        # compare against what's currently deployed
 npx aws-cdk deploy      # actually create/update AWS resources — needs credentials
 ```
+
+**`synth` now needs valid AWS credentials too**, not just `deploy`/`diff` — a change from
+before. `app.py` resolves `CDK_DEFAULT_ACCOUNT`/`CDK_DEFAULT_REGION` at synth time and passes
+them explicitly to every stack, because the WAF stack's cross-region reference (below) requires
+every stack in the reference to have a known account and region up front; an environment-agnostic
+stack can't be one end of that link. Run `aws sso login --profile dev` first if a command fails
+with a `CDK_DEFAULT_ACCOUNT` `KeyError`.
 
 ```sh
 python -m pytest tests/ -v
@@ -41,9 +48,22 @@ decided on. Origin access control (not the legacy OAI pattern), a CloudFront Fun
 fallback routing, and a second CloudFront Function for security headers — both named in
 ADR-001 directly.
 
-**Deliberately not included yet**, because neither has a decided shape: a custom domain and
-ACM certificate (no domain name exists to point at), and a WAF web ACL (no rate-limit rules
-have been decided). Adding either now would misrepresent them as settled.
+**Deliberately not included: a custom domain and ACM certificate.** This is a portfolio
+project with no NASA domain to point at — a self-issued placeholder domain would misrepresent
+that as settled, so the distribution is only ever reached at its `*.cloudfront.net` address.
+
+**`stacks/frontend_waf_stack.py`** — the WAF web ACL ADR-001 flagged as an open item, now
+closed. Scoped to `CLOUDFRONT`, deployed to **us-east-1 unconditionally** — that's not this
+app's home region, it's a hard requirement of WAFv2 web ACLs scoped to CloudFront, which are
+only creatable via the us-east-1 API regardless of where anything else lives. `app.py` wires
+its ARN into `FrontendHostingStack` (deployed in the profile's own region) via CDK cross-region
+references, which is why both stacks now need an explicit `env` — see the `synth` note above.
+
+Every rule — three AWS Managed Rule Groups (Common, Known Bad Inputs, IP Reputation) plus a
+2000-requests-per-5-minutes-per-IP rate limit — starts in **Count mode, not Block**. There is
+no production traffic yet to tune against; count mode surfaces what *would* be blocked in
+CloudWatch metrics and sampled requests before any real request is ever dropped. Flipping a
+rule to Block once that's confirmed clean is a deliberate follow-up, not a gap.
 
 **`stacks/frontend_build_project_stack.py`** — an AWS CodeBuild project that builds the
 frontend and uploads it to the bucket above, so that work runs on AWS compute instead of a

@@ -40,12 +40,19 @@ function handler(event) {
 class FrontendHostingStack(Stack):
     """S3 + CloudFront static hosting for the frontend, per ADR-001.
 
-    Deliberately does not configure a custom domain/certificate or a WAF
-    web ACL: neither has a decided shape yet (no domain name, no rate-limit
-    rules), and inventing one here would misrepresent this as settled.
+    Deliberately does not configure a custom domain/certificate: this is a
+    portfolio project with no NASA domain to point at, so a self-issued
+    placeholder would misrepresent that as settled. The WAF web ACL is
+    wired in via web_acl_arn (see FrontendWafStack, app.py).
     """
 
-    def __init__(self, scope: Construct, construct_id: str, **kwargs) -> None:
+    def __init__(
+        self,
+        scope: Construct,
+        construct_id: str,
+        web_acl_arn: str,
+        **kwargs,
+    ) -> None:
         super().__init__(scope, construct_id, **kwargs)
 
         bucket = s3.Bucket(
@@ -76,6 +83,7 @@ class FrontendHostingStack(Stack):
             self,
             "FrontendDistribution",
             default_root_object="index.html",
+            web_acl_id=web_acl_arn,
             default_behavior=cloudfront.BehaviorOptions(
                 origin=origins.S3BucketOrigin.with_origin_access_control(bucket),
                 viewer_protocol_policy=cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,

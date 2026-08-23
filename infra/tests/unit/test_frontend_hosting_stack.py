@@ -4,9 +4,17 @@ from aws_cdk.assertions import Template
 from stacks.frontend_hosting_stack import FrontendHostingStack
 
 
+_TEST_WEB_ACL_ARN = (
+    "arn:aws:wafv2:us-east-1:123456789012:global/webacl/test/"
+    "00000000-0000-0000-0000-000000000000"
+)
+
+
 def _template() -> Template:
     app = cdk.App()
-    stack = FrontendHostingStack(app, "TestFrontendHostingStack")
+    stack = FrontendHostingStack(
+        app, "TestFrontendHostingStack", web_acl_arn=_TEST_WEB_ACL_ARN
+    )
     return Template.from_stack(stack)
 
 
