@@ -48,19 +48,20 @@ have been decided). Adding either now would misrepresent them as settled.
 **`stacks/frontend_build_project_stack.py`** — an AWS CodeBuild project that builds the
 frontend and uploads it to the bucket above, so that work runs on AWS compute instead of a
 laptop. It runs the exact same scripts a human would (`scripts/build-frontend.sh`,
-`scripts/upload-frontend.sh`, `scripts/invalidate-cache.sh`, via `../buildspec.yml`) rather
-than duplicating that logic — CodeBuild is just another caller of it.
+`scripts/upload-frontend.sh`, `scripts/invalidate-cache.sh`, via `../frontend/buildspec.yml`
+— scoped under `frontend/`, not repo root, since this builds the frontend specifically, not
+"the repo") rather than duplicating that logic — CodeBuild is just another caller of it.
 
-This stack needs two things that don't exist yet:
+This stack needs two things:
 
-- **The GitHub repo it pulls from**, passed as CDK context — there's no default:
-  ```sh
-  npx aws-cdk deploy ClimateImpactsFrontendBuildProject -c githubOwner=<owner> -c githubRepo=<repo>
-  ```
+- **The GitHub repo it pulls from**, passed as CDK context. `scripts/provision-infra.sh`
+  already supplies this (with real defaults baked in — see that script) — deploy via that,
+  not a raw `cdk deploy` call.
 - **A one-time GitHub connection authorized for this AWS account**, before CodeBuild can pull
   *any* GitHub source, public or private. Not part of this stack (it's an account-level,
   interactive authorization, not something CDK can create unattended) — set up via the
-  CodeBuild console (Source credentials) or `aws codebuild import-source-credentials`.
+  CodeBuild console (Source credentials) or `aws codebuild import-source-credentials`. Already
+  done for this project.
 
 Its IAM role is scoped narrowly on purpose — S3 read/write on just this one bucket,
 `cloudfront:CreateInvalidation` on just this one distribution, nothing broader. Verified by
@@ -68,14 +69,9 @@ inspecting the synthesized template, not assumed.
 
 ## Deploying
 
-Two independent stacks now — name the one you mean, or CDK prompts for confirmation on
-`--all`:
+Both stacks deploy together, in one command: `../scripts/provision-infra.sh`, which runs
+`cdk deploy --all`. One more stack later doesn't mean a new script — add it in `app.py` and
+this picks it up automatically; CloudFormation only changes what actually differs per stack.
 
-```sh
-npx aws-cdk deploy ClimateImpactsFrontendHosting
-npx aws-cdk deploy ClimateImpactsFrontendBuildProject -c githubOwner=<owner> -c githubRepo=<repo>
-```
-
-Both need AWS credentials for the target account and create real, billed resources. Nothing
-has been deployed from `frontend_build_project_stack.py` yet — running it is a deliberate
-action, not something to do casually while testing.
+Both stacks are live — this has actually been run, not just written. Re-running is safe:
+`cdk deploy` diffs against what's deployed and only changes what's actually different.
