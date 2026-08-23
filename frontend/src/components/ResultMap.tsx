@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import type { ReactNode } from "react";
 import { Map as MapLibreMap, Marker, NavigationControl, setWorkerUrl } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import maplibreWorkerUrl from "maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url";
@@ -60,6 +61,8 @@ interface ResultMapProps {
   /** 0 (least severe) to 1 (most severe), used only for the marker color. */
   intensity: number;
   valueLabel: string;
+  /** Rendered between the header and the map canvas, e.g. an indicator toggle. */
+  toggle?: ReactNode;
 }
 
 function markerColor(intensity: number): string {
@@ -69,7 +72,7 @@ function markerColor(intensity: number): string {
   return `hsl(${hue}, 85%, 45%)`;
 }
 
-export function ResultMap({ title, center, zoom, intensity, valueLabel }: ResultMapProps) {
+export function ResultMap({ title, center, zoom, intensity, valueLabel, toggle }: ResultMapProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
   const markerRef = useRef<Marker | null>(null);
@@ -113,11 +116,12 @@ export function ResultMap({ title, center, zoom, intensity, valueLabel }: Result
 
   return (
     <div className="result-map">
+      <div ref={containerRef} className="result-map-canvas" />
       <div className="result-map-header">
         <h3>{title}</h3>
         <span className="result-map-value">{valueLabel}</span>
       </div>
-      <div ref={containerRef} className="result-map-canvas" />
+      {toggle}
     </div>
   );
 }

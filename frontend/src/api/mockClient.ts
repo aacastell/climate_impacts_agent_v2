@@ -1,5 +1,6 @@
 import type {
   ApiClient,
+  ClimateIndicatorPayload,
   Crop,
   MapCenter,
   QueryAnswer,
@@ -72,6 +73,49 @@ function findWarmingLevel(question: string): number | null {
   return level > 0 && level <= 5 ? level : null;
 }
 
+function buildClimateIndicators(
+  warmingLevelC: number,
+  rand: () => number,
+): ClimateIndicatorPayload[] {
+  const tempChange = Number((warmingLevelC * (1.1 + rand() * 0.6)).toFixed(1));
+  // Synthetic, not a real precip response — some regions dry, some wet, both
+  // plausible under warming, so this can land on either side of zero.
+  const precipChange = Number(((rand() - 0.5) * 10 * warmingLevelC).toFixed(1));
+  // Dry-day counts trend up with warming in this synthetic model; never
+  // negative, since "fewer dry days" isn't the story this mock is telling.
+  const consecutiveDryDays = Math.round(rand() * 5 * warmingLevelC);
+  // Extreme-heat-day counts respond more steeply to warming than dry days
+  // in this synthetic model — still never negative, same reasoning.
+  const extremeHeatDays = Math.round(rand() * 8 * warmingLevelC);
+
+  return [
+    {
+      id: "temp_change",
+      title: `Local temperature change at ${warmingLevelC}°C global warming`,
+      unit: "°C",
+      value: tempChange,
+    },
+    {
+      id: "precip_change",
+      title: `Local precipitation change at ${warmingLevelC}°C global warming`,
+      unit: "% precip change",
+      value: precipChange,
+    },
+    {
+      id: "consecutive_dry_days",
+      title: `Change in consecutive dry days at ${warmingLevelC}°C global warming`,
+      unit: "days",
+      value: consecutiveDryDays,
+    },
+    {
+      id: "extreme_heat_days",
+      title: `Change in extreme heat days at ${warmingLevelC}°C global warming`,
+      unit: "days",
+      value: extremeHeatDays,
+    },
+  ];
+}
+
 const CROP_LABELS: Record<Crop, string> = {
   maize: "maize",
   spring_wheat: "spring wheat",
@@ -128,7 +172,8 @@ export class MockApiClient implements ApiClient {
   ): QueryAnswer {
     const rand = seededRandom(hashSeed(`${region.name}|${crop}|${warmingLevelC}`));
 
-    const climateValue = Number((warmingLevelC * (1.1 + rand() * 0.6)).toFixed(1));
+    const indicators = buildClimateIndicators(warmingLevelC, rand);
+    const tempChange = indicators[0].value;
 
     const yieldCenter = -(warmingLevelC * (3 + rand() * 4));
     const spread = 4 + rand() * 6;
@@ -147,11 +192,9 @@ export class MockApiClient implements ApiClient {
         warmingLevelC,
       },
       climateMap: {
-        title: `Local temperature change at ${warmingLevelC}°C global warming`,
-        unit: "°C",
-        value: climateValue,
         center: region.center,
         zoom: 5,
+        indicators,
       },
       sectorMap: {
         title: `${cropLabel} yield change at ${warmingLevelC}°C global warming`,
@@ -162,7 +205,7 @@ export class MockApiClient implements ApiClient {
       },
       narration:
         `At ${warmingLevelC}°C of global warming, ${region.name} is projected to warm by about ` +
-        `${climateValue}°C locally under SSP3-7.0, based on the GFDL-ESM4 climate model. ` +
+        `${tempChange}°C locally under SSP3-7.0, based on the GFDL-ESM4 climate model. ` +
         `Non-irrigated ${cropLabel} yields in the region are projected to change by ` +
         `${sectorRange[0]}% to ${sectorRange[1]}% relative to baseline, reflecting the spread ` +
         `between the pDSSAT and LPJmL crop models.`,

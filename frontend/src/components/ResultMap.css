@@ -14,7 +14,7 @@
   align-items: baseline;
   gap: 0.75rem;
   padding: 0.65rem 0.85rem;
-  border-bottom: 1px solid var(--border);
+  border-top: 1px solid var(--border);
 }
 
 .result-map-header h3 {
@@ -31,6 +31,11 @@
 
 .result-map-canvas {
   width: 100%;
+  /* Fixed, and first in source order (see ResultMap.tsx) — the map itself
+     is always the same size and top-aligned across boxes, regardless of
+     how much caption/toggle text follows it. Letting content push the map
+     down by a variable amount (title above it) was the actual bug; a
+     variable-height caption below a fixed-size map is harmless. */
   height: 320px;
 }
 

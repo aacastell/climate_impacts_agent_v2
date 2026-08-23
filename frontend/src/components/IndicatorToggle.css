@@ -1,0 +1,23 @@
+.indicator-toggle {
+  display: flex;
+  gap: 0.35rem;
+  padding: 0.5rem 0.85rem;
+  border-top: 1px solid var(--border);
+}
+
+.indicator-toggle-option {
+  padding: 0.3rem 0.65rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--panel-bg);
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.indicator-toggle-option-selected {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: white;
+}

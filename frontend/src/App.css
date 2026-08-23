@@ -42,5 +42,10 @@
 .app-maps {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  /* Default grid behavior stretches every item in a row to the tallest
+     sibling's height — exactly what caused the maps to end up different
+     sizes when their caption/toggle content differed. Each box should
+     just be as tall as its own content, no more. */
+  align-items: start;
   gap: 1rem;
 }
