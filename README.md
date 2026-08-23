@@ -54,8 +54,9 @@ They are reconciled explicitly, never implicitly inside a model.
 | Frontend delivery | Decided — [ADR-001](docs/adr/adr-001-frontend-hosting.md) |
 | Frontend framework | Decided — [ADR-002](docs/adr/adr-002-frontend-framework.md) |
 | Infrastructure provisioning | Decided — [ADR-003](docs/adr/adr-003-infrastructure-provisioning.md) |
+| Map data delivery | Decided — [ADR-004](docs/adr/adr-004-map-data-delivery.md) |
 | API tier | Open |
-| Precompute vs. on-demand | Open |
+| Precompute vs. on-demand | Decided for map data (precompute — ADR-004); open for narration |
 | Indicator set and aggregation rules | Open — pending scientific sign-off |
 | Verification gate | Open |
 
