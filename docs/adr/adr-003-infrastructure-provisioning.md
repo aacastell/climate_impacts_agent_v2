@@ -129,9 +129,17 @@ benefit doesn't clear the bar.
   cadence. Infrastructure changes rarely and carries more risk per change (a VPC or IAM
   policy); frontend/content deploys happen often and are cheap to reverse. One pipeline for
   both was flagged as a common mistake and is deliberately avoided.
-- **Applied via CI, never from a developer's laptop** — mirrors the frontend build's ephemeral
-  compute model. Provisioning AWS resources should not depend on any one person's local
-  credentials being present and correctly configured.
+- **Applied by hand, from a developer machine, via `scripts/deploy.sh` /
+  `scripts/provision-infra.sh`** — not mirrored to CI, unlike the frontend build. A CI-applied
+  path is achievable (a CodeBuild project mirroring `FrontendBuildProjectStack`'s
+  webhook-triggered pattern, running `cdk deploy --all` on push to `infra/**`), but it requires
+  a standing service role broad enough to create or modify anything any stack under `infra/`
+  might ever define — effectively account-admin-adjacent — held permanently rather than
+  assumed only when someone acts. Weighed against that: the manual path is one person running
+  `git clone && bash scripts/deploy.sh`, authenticated with short-lived SSO credentials
+  (`aws sso login`), no static keys stored anywhere. At this system's current scale — one or
+  two people, occasional deploys — the smaller, human-gated, short-lived credential is judged
+  the lower-risk standing exposure, not the permanent broad role. See revisit trigger below.
 
 ---
 
@@ -148,6 +156,10 @@ benefit doesn't clear the bar.
   scratch (see revisit trigger).
 - Python CDK's marginally slower day-one access to brand-new AWS construct coverage, relative
   to TypeScript.
+- **Infrastructure provisioning runs from a developer machine, not CI**, unlike the frontend
+  build. Accepted deliberately, not overlooked: the CI alternative trades an occasional,
+  human-gated action on short-lived credentials for a permanently broad, standing service IAM
+  role — a larger continuous exposure than it removes, at this system's current scale.
 
 **Gained:**
 
@@ -183,3 +195,8 @@ benefit doesn't clear the bar.
 - **A NASA infrastructure team with existing IaC standards takes ownership** — the open item
   flagged in ADR-001. This entire ADR is superseded by whatever standard they already run,
   not merged with it.
+- **More than one or two people routinely run deploys, or credential hygiene becomes
+  inconsistent** (shared static keys, no SSO, deploys from untrusted machines) — reopens the
+  manual-vs-CI provisioning choice above toward a CI-applied path (a CodeBuild project
+  mirroring `FrontendBuildProjectStack`, triggered on push to `infra/**`), accepting the
+  broader standing IAM role as the trade.
