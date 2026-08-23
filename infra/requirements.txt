@@ -1,0 +1,6 @@
+# Floor, not a pin — see repo README convention on not hard-coding figures
+# that go stale invisibly. `pip install -r requirements.txt` resolves to the
+# current release; this floor is only high enough to guarantee the
+# origin-access-control CloudFront API used in stacks/ is available.
+aws-cdk-lib>=2.180.0,<3.0.0
+constructs>=10.0.0,<11.0.0

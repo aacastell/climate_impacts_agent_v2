@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+cdk.out/
+.cdk.staging/
+
+.DS_Store
+outputs.json

@@ -1,0 +1,15 @@
+version: 0.2
+
+# Calls the same scripts a human runs locally (scripts/), rather than
+# duplicating the build/upload/invalidate logic here — CodeBuild is just
+# another caller of that logic, same as GitHub Actions or a person would be.
+
+phases:
+  install:
+    runtime-versions:
+      nodejs: 22
+  build:
+    commands:
+      - bash scripts/build-frontend.sh
+      - bash scripts/upload-frontend.sh
+      - bash scripts/invalidate-cache.sh
