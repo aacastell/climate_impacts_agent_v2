@@ -1,5 +1,6 @@
 from aws_cdk import (
     CfnOutput,
+    Duration,
     Stack,
     aws_codebuild as codebuild,
     aws_s3 as s3,
@@ -56,7 +57,22 @@ class IsimipFetchBuildProjectStack(Stack):
             ),
             environment=codebuild.BuildEnvironment(
                 build_image=codebuild.LinuxBuildImage.STANDARD_7_0,
+                # Default SMALL compute is the lowest network-throughput
+                # tier available — fine for the frontend build (a few MB),
+                # not sized for this project's real transfer volume (tens
+                # of GB). MEDIUM as a deliberate middle ground, not the
+                # largest tier — if profiling data (see
+                # climate_pipeline/fetch/profiling.py) shows it's still
+                # not enough, that's the informed case for going bigger,
+                # not a guess.
+                compute_type=codebuild.ComputeType.MEDIUM,
             ),
+            # Default build timeout is 60 minutes — untested against this
+            # project's real transfer volume (~43 GB across 12 stages) at
+            # the time this was set. Generous explicit bound rather than
+            # risking a false failure on first real use; profiling data
+            # will tell us the real number to tighten this to later.
+            timeout=Duration.hours(4),
             build_spec=codebuild.BuildSpec.from_source_filename("pipeline/buildspec.yml"),
         )
 

@@ -48,3 +48,23 @@ def test_project_has_fixed_predictable_name():
         "AWS::CodeBuild::Project",
         {"Name": "ClimateImpactsIsimipFetch"},
     )
+
+
+def test_compute_is_upgraded_past_the_low_throughput_default():
+    """SMALL (the CDK/CodeBuild default) is the lowest network-throughput
+    tier — untested against this project's real transfer volume (tens of
+    GB). MEDIUM is the deliberate minimum here, not SMALL."""
+    _template().has_resource_properties(
+        "AWS::CodeBuild::Project",
+        {"Environment": Match.object_like({"ComputeType": "BUILD_GENERAL1_MEDIUM"})},
+    )
+
+
+def test_timeout_is_generous_past_the_untested_default():
+    """Default CodeBuild timeout is 60 minutes — untested against ~43 GB
+    across 12 fetch stages at the time this was set. Explicit and
+    generous, not left at the default."""
+    _template().has_resource_properties(
+        "AWS::CodeBuild::Project",
+        {"TimeoutInMinutes": 240},
+    )

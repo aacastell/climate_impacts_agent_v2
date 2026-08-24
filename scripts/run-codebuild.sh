@@ -16,18 +16,24 @@ if [ -z "${AWS_PROFILE:-}" ] && aws configure list-profiles 2>/dev/null | grep -
   export AWS_PROFILE="dev"
 fi
 
-PROJECT_NAME="${1:?Usage: run-codebuild.sh <codebuild-project-name>}"
+PROJECT_NAME="${1:?Usage: run-codebuild.sh <codebuild-project-name> [max-wait-minutes]}"
+# Default (30 min) fits the frontend build, which should fail fast if
+# something's wrong. Long-running builds (e.g. the ISIMIP fetch, real
+# transfer volume in the tens of GB) need a longer wait explicitly passed
+# as the second argument — this script has no way to know a project's
+# expected duration on its own.
+MAX_WAIT_MINUTES="${2:-30}"
 
 echo "==> Starting CodeBuild run for $PROJECT_NAME (builds main on GitHub, not local files)"
 BUILD_ID=$(aws codebuild start-build --project-name "$PROJECT_NAME" --query 'build.id' --output text)
 echo "==> Build started: $BUILD_ID"
 
-MAX_CHECKS=180 # 180 * 10s = 30 minutes
+MAX_CHECKS=$((MAX_WAIT_MINUTES * 6)) # 6 checks/minute at 10s intervals
 CHECKS=0
 STATUS="IN_PROGRESS"
 while [ "$STATUS" == "IN_PROGRESS" ]; do
   if [ "$CHECKS" -ge "$MAX_CHECKS" ]; then
-    echo "Timed out waiting for build $BUILD_ID after 30 minutes." >&2
+    echo "Timed out waiting for build $BUILD_ID after $MAX_WAIT_MINUTES minutes." >&2
     exit 1
   fi
   sleep 10

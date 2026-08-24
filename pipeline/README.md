@@ -18,6 +18,18 @@ which re-runs unconditionally because it's cheap, re-fetching multi-gigabyte
 ISIMIP files on every CodeBuild run regardless of whether anything changed
 would be a real, avoidable cost.
 
+**`profiling.py`** — records how long each fetch stage actually took and at
+what throughput, written as a timestamped JSON record to `_profiling/` in
+the same bucket (not under `raw/` — this is observability data, not a
+scientific data product, and not DVC-tracked for the same reason). This
+exists specifically for what CodeBuild's own build report *can't* see:
+`aws codebuild batch-get-builds` gives phase-level timing for free (how
+long the whole `BUILD` phase took), but all 12 fetch stages run inside that
+one opaque phase — CodeBuild has no visibility into which individual stage
+was slow, or what the real transfer throughput was. `stream_to_s3.py`
+records per-file `duration_seconds`/`throughput_mbps` in its manifest;
+`profiling.py` rolls those up into one summary per stage per run.
+
 **S3 key layout**, so the bucket stays browsable as more scenarios/crops get
 added rather than accumulating ad hoc paths:
 

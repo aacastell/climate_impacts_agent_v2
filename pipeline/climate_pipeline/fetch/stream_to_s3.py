@@ -12,9 +12,16 @@ compare against. S3 is the durable state that actually persists across
 ephemeral runs, so that's what this checks — see conversation in this
 project on why re-running the fetch stage unconditionally (the frontend
 build's model, fine there because it's cheap) is the wrong default here.
+
+Each returned manifest also carries per-file `duration_seconds` and
+`throughput_mbps` — CodeBuild's own build report only sees one opaque
+`BUILD` phase covering all 12 fetch stages; it has no visibility into how
+long any individual file took. See profiling.py for the per-stage summary
+built from these.
 """
 
 import hashlib
+import time
 from collections.abc import Iterator
 from datetime import UTC, datetime
 
@@ -84,6 +91,8 @@ def _reusable_manifest(s3, bucket: str, key: str, file_entry: dict) -> dict | No
         "size_bytes": file_entry["size"],
         "fetched_at": metadata.get("isimip-fetched-at", datetime.now(UTC).isoformat()),
         "skipped_fetch": True,
+        "duration_seconds": 0.0,
+        "throughput_mbps": None,
     }
 
 
@@ -106,6 +115,7 @@ def stream_file_to_s3(file_entry: dict, bucket: str, key: str) -> dict:
         return reusable
 
     fetched_at = datetime.now(UTC).isoformat()
+    started = time.monotonic()
     with httpx.stream("GET", file_entry["file_url"], timeout=None, follow_redirects=True) as response:
         response.raise_for_status()
         stream = _HashingStream(response.iter_bytes(chunk_size=_CHUNK_SIZE), file_entry["checksum_type"])
@@ -121,6 +131,7 @@ def stream_file_to_s3(file_entry: dict, bucket: str, key: str) -> dict:
                 }
             },
         )
+    duration_seconds = time.monotonic() - started
 
     if stream.hexdigest() != file_entry["checksum"]:
         s3.delete_object(Bucket=bucket, Key=key)
@@ -137,4 +148,8 @@ def stream_file_to_s3(file_entry: dict, bucket: str, key: str) -> dict:
         "size_bytes": file_entry["size"],
         "fetched_at": fetched_at,
         "skipped_fetch": False,
+        "duration_seconds": round(duration_seconds, 2),
+        "throughput_mbps": round((file_entry["size"] * 8 / 1_000_000) / duration_seconds, 2)
+        if duration_seconds > 0
+        else None,
     }

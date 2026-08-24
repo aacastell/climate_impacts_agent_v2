@@ -9,10 +9,12 @@ Scope section.
 """
 
 import argparse
+from datetime import UTC, datetime
 from pathlib import Path
 
 from climate_pipeline.fetch.isimip_client import only_file, search_dataset
 from climate_pipeline.fetch.manifest import write_manifest
+from climate_pipeline.fetch.profiling import record_run
 from climate_pipeline.fetch.stream_to_s3 import stream_file_to_s3
 
 WINDOWS = {"baseline": "historical", "future": "ssp370"}
@@ -40,6 +42,7 @@ def fetch_agriculture(crop: str, window: str, bucket: str, manifest_dir: Path) -
         bucket — destination S3 bucket. manifest_dir — where to write the DVC-tracked manifest.
     Returns: path to the written manifest (the actual DVC stage output — see ADR-006 Step 8).
     """
+    started_at = datetime.now(UTC)
     scenario = WINDOWS[window]
     dataset = search_dataset(
         product="OutputData",
@@ -56,6 +59,9 @@ def fetch_agriculture(crop: str, window: str, bucket: str, manifest_dir: Path) -
 
     key = f"raw/agriculture/lpjml/{crop}/{scenario}/{file_entry['name']}"
     manifest = stream_file_to_s3(file_entry, bucket, key)
+
+    record_run(bucket, f"lpjml_{crop}_{window}", started_at, [manifest])
+
     return write_manifest(manifest, manifest_dir / f"lpjml_{crop}_{window}.json")
 
 

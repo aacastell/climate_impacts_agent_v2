@@ -17,10 +17,12 @@ boundary-straddling file, trimmed later in the process stage, never here.
 
 import argparse
 import re
+from datetime import UTC, datetime
 from pathlib import Path
 
 from climate_pipeline.fetch.isimip_client import search_dataset
 from climate_pipeline.fetch.manifest import write_manifest
+from climate_pipeline.fetch.profiling import record_run
 from climate_pipeline.fetch.stream_to_s3 import stream_file_to_s3
 
 WINDOWS = {
@@ -53,6 +55,7 @@ def fetch_climate_variable(variable: str, window: str, bucket: str, manifest_dir
         bucket — destination S3 bucket. manifest_dir — where to write the DVC-tracked manifest.
     Returns: path to the written manifest (the actual DVC stage output — see ADR-006 Step 8).
     """
+    started_at = datetime.now(UTC)
     spec = WINDOWS[window]
     dataset = search_dataset(
         product="InputData",
@@ -67,6 +70,8 @@ def fetch_climate_variable(variable: str, window: str, bucket: str, manifest_dir
         )
         for file_entry in files
     ]
+
+    record_run(bucket, f"{variable}_{window}", started_at, file_manifests)
 
     return write_manifest(
         {
