@@ -60,7 +60,7 @@ indicators are separately still follow-up work — they're not raw ISIMIP
 variables fetch pulls directly; that's the process stage's job.
 
 **Climate baseline is 1995–2014 (the last 20 years of ISIMIP's historical
-record); climate future is 2026–2100.** Not the entire historical span —
+record); climate future is 2015–2100.** Not the entire historical span —
 that was an intermediate step, since replaced. ISIMIP only serves whole
 pre-chunked decadal files, not arbitrary date ranges, so a target window
 that doesn't align with ISIMIP's own chunk boundaries (1995 falls inside
@@ -69,14 +69,36 @@ extra years ride along, trimmed later in the process stage, never at fetch.
 `_files_overlapping()` in `climate.py` selects exactly the covering files
 and nothing else — verified directly against the catalog: baseline pulls 3
 files per variable (`1991_2000`, `2001_2010`, `2011_2014`, ~5 GB), future
-pulls 8 (`2021_2030` through `2091_2100`, ~16.5 GB) — down from ~104 GB
-across 54 files when the full span was fetched.
+pulls 9 (`2015_2020` through `2091_2100`, ~17.7 GB).
+
+Future starts at 2015, not 2026: the process stage's target design computes
+a global warming level for *every* year via a 20-year window centered on
+it (the same methodology IPCC AR6's Atlas uses), not just a few fixed
+checkpoints — centering on year Y needs data back to Y-10, so 2015 as the
+earliest fetched year makes ~2025+ the earliest usable center year. This
+widening only cost ~2.5 GB in practice (one new `2015_2020` file per
+variable) — the per-file S3 skip-check meant the other 8 already-fetched
+future files and all 3 baseline files were skipped, not re-downloaded.
+
+**`fetch_tas_preindustrial`** (tas only) fetches 1850–1900 — the IPCC
+standard preindustrial reference period global warming levels are measured
+against, *not* ISIMIP's own separate "preindustrial scenario" (that's
+1601–1849, a different thing used for model-drift control runs). 1850–1900
+is simply the start of ISIMIP's own `historical` GFDL-ESM4 dataset
+(verified live: the earliest file is `..._historical_tas_..._1850_1850.nc`)
+— reusing the exact same dataset and bias-adjustment pipeline as this
+project's own baseline, just an earlier year-slice of it, rather than
+importing a preindustrial number from elsewhere and risking a mismatched
+bias-adjustment. 6 files, ~10.5 GB (`1850_1850` through `1891_1900`). pr
+has no preindustrial-GWL concept — GWL is a temperature-only definition —
+so this window is tas-only, enforced in code (`climate.py` raises if asked
+to fetch it for `pr`), not just documented.
 
 **Agriculture is unaffected by this — it was already as small as it gets.**
 LPJmL yield files come as one file per crop covering the *entire* span
 (1850–2014 baseline, 2015–2100 future); ISIMIP doesn't offer a smaller
 pre-chunked agriculture file to select from the way it does for climate.
-Trimming agriculture data to the same 1995–2014 / 2026–2100 windows happens
+Trimming agriculture data to the same 1995–2014 / 2015–2100 windows happens
 entirely in the process stage — there's nothing to reduce at fetch time.
 **This does not yet mean the real 20-year-baseline / warming-level-anchored
 windows ADR-006 describes are implemented** — that slicing is still the

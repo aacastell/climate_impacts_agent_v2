@@ -21,11 +21,22 @@ PROJECT_NAME="ClimateImpactsIsimipFetch"
 # (SUCCEEDED or the account-level TIMED_OUT) instead of giving up first.
 MAX_WAIT_MINUTES=50
 
-# tas/pr baseline (3 files, ~2GB each, ~13 min) and future (8 files, ~36
-# min) are kept separate — combined, either variable's two windows together
-# measured ~47 min, over the cap. Agriculture's 8 stages are one LPJmL
-# output file each, far smaller than the climate driver files, so they're
-# grouped into a single build.
+# tas/pr baseline (3 files, ~2GB each, ~13 min) and future (now 9 files after
+# widening the future window to 2015 — ~37 min) are kept separate — combined,
+# either variable's two windows together measured ~47 min, over the cap.
+# Agriculture's 8 stages are one LPJmL output file each, far smaller than the
+# climate driver files, so they're grouped into a single build.
+#
+# fetch_tas_preindustrial is new: 6 files, ~10.5GB, ~23 min at the measured
+# rate — the GWL preindustrial reference (1850-1900), tas-only. Its own group
+# for the same reason baseline/future are split: real margin under the cap,
+# not packed in with something else on the assumption it'll stay small.
+#
+# Re-running this whole script after this change costs little even though
+# most groups are unchanged: the per-file S3 skip-check means baseline/pr
+# groups and all 8 agriculture stages skip near-instantly (already fetched),
+# and tas_future/pr_future only actually transfer their one new file each
+# (2015_2020, ~1.2GB) — only fetch_tas_preindustrial does real new work.
 #
 # Named FETCH_GROUPS, not GROUPS: `GROUPS` is a bash builtin special
 # variable (the current user's real UNIX group IDs, like $UID/$PPID) —
@@ -36,6 +47,7 @@ MAX_WAIT_MINUTES=50
 FETCH_GROUPS=(
   "fetch_tas_baseline"
   "fetch_tas_future"
+  "fetch_tas_preindustrial"
   "fetch_pr_baseline"
   "fetch_pr_future"
   "fetch_agriculture_maize_baseline fetch_agriculture_maize_future fetch_agriculture_spring_wheat_baseline fetch_agriculture_spring_wheat_future fetch_agriculture_soy_baseline fetch_agriculture_soy_future fetch_agriculture_rice_baseline fetch_agriculture_rice_future"

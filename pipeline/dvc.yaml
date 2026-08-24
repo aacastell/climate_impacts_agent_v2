@@ -19,6 +19,16 @@ stages:
     outs:
       - manifests/tas_future.json
 
+  fetch_tas_preindustrial:
+    cmd: python -m climate_pipeline.fetch.climate --variable tas --window preindustrial --bucket climate-impacts-isimip-raw-148323855774 --manifest-dir manifests
+    deps:
+      - climate_pipeline/fetch/isimip_client.py
+      - climate_pipeline/fetch/stream_to_s3.py
+      - climate_pipeline/fetch/manifest.py
+      - climate_pipeline/fetch/climate.py
+    outs:
+      - manifests/tas_preindustrial.json
+
   fetch_pr_baseline:
     cmd: python -m climate_pipeline.fetch.climate --variable pr --window baseline --bucket climate-impacts-isimip-raw-148323855774 --manifest-dir manifests
     deps:
