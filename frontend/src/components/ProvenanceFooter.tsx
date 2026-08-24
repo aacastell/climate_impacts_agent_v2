@@ -15,8 +15,8 @@ export function ProvenanceFooter({ provenance }: ProvenanceFooterProps) {
         <dd>{provenance.climateModel}</dd>
       </div>
       <div>
-        <dt>Crop models</dt>
-        <dd>{provenance.cropModels.join(", ")}</dd>
+        <dt>Crop model</dt>
+        <dd>{provenance.cropModel}</dd>
       </div>
       <div>
         <dt>Scenario</dt>

@@ -103,8 +103,8 @@ function App() {
               title={answer.sectorMap.title}
               center={answer.sectorMap.center}
               zoom={answer.sectorMap.zoom}
-              intensity={0.5 - answer.sectorMap.range[0] / SECTOR_INTENSITY_SCALE / 2}
-              valueLabel={`${answer.sectorMap.range[0]} to ${answer.sectorMap.range[1]}${answer.sectorMap.unit}`}
+              intensity={Math.abs(answer.sectorMap.value) / SECTOR_INTENSITY_SCALE}
+              valueLabel={formatSigned(answer.sectorMap.value, answer.sectorMap.unit)}
             />
           </div>
 

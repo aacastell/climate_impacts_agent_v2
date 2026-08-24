@@ -47,12 +47,16 @@ export interface ClimateMapPayload {
   indicators: ClimateIndicatorPayload[];
 }
 
-// Two crop models (pDSSAT, LPJmL) — always a range, never a mean or
-// confidence interval. See README: "report the range, never a mean."
+// A single crop model (LPJmL) — a single value, never a range. pDSSAT was
+// dropped for this MVP (no SSP3-7.0 output for GFDL-ESM4 — see repo root
+// README Scope section), leaving nothing to range LPJmL's output against.
+// Framing a single model's output as a range would fabricate an uncertainty
+// estimate the data doesn't support — the same rule ADR-004 already states
+// for climate indicators, applied here to yield.
 export interface SectorMapPayload {
   title: string;
   unit: string;
-  range: [number, number];
+  value: number;
   center: MapCenter;
   zoom: number;
 }
@@ -61,7 +65,7 @@ export interface Provenance {
   dataVersion: string;
   indicatorVersion: string;
   climateModel: string;
-  cropModels: string[];
+  cropModel: string;
   scenario: string;
   runSpecifier: string;
   promptVersion: string;
