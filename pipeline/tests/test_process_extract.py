@@ -5,9 +5,14 @@ import xarray as xr
 
 from climate_pipeline.process.extract import (
     absolute_change,
+    area_weights,
+    global_area_weighted_mean,
+    grid_mean,
     nearest_point_mean,
     nearest_point_yield_mean,
     percent_change,
+    percent_change_grid,
+    yield_grid_mean,
     yield_season_start_year,
 )
 
@@ -83,3 +88,54 @@ def test_percent_change_computes_relative_difference():
 def test_percent_change_raises_on_zero_baseline():
     with pytest.raises(ValueError):
         percent_change(future_mean=5.0, baseline_mean=0.0)
+
+
+def test_area_weights_are_larger_near_the_equator_than_poles():
+    lat = xr.DataArray([0.0, 60.0, -60.0], dims="lat", coords={"lat": [0.0, 60.0, -60.0]})
+    weights = area_weights(lat)
+    assert weights.sel(lat=0.0).item() > weights.sel(lat=60.0).item()
+    assert weights.mean().item() == pytest.approx(1.0)
+
+
+def test_global_area_weighted_mean_weights_by_cos_latitude():
+    # lat=0 (weight cos(0)=1) has tas=10; lat=60 (weight cos(60)=0.5) has tas=20.
+    # Weighted mean = (10*1 + 20*0.5) / (1+0.5) = 13.33...
+    times = pd.date_range("2000-01-01", periods=1, freq="YS")
+    data = np.array([[[10.0], [20.0]]])  # shape (time=1, lat=2, lon=1)
+    ds = xr.Dataset(
+        {"tas": (["time", "lat", "lon"], data)},
+        coords={"time": times, "lat": [0.0, 60.0], "lon": [0.0]},
+    )
+    mean = global_area_weighted_mean(ds, "tas", 2000, 2000)
+    assert mean == pytest.approx(40.0 / 3.0)
+
+
+def test_grid_mean_returns_the_full_spatial_grid_not_a_scalar():
+    ds = _climate_dataset()  # 3 lon x 2 lat x 6 years, value = calendar year everywhere
+    grid = grid_mean(ds, "tas", 2011, 2013)
+    assert grid.dims == ("lat", "lon")
+    assert grid.shape == (2, 3)
+    assert (grid == 2012.0).all()
+
+
+def test_yield_grid_mean_returns_the_full_spatial_grid():
+    ds = _yield_dataset(start_year=1990)
+    grid = yield_grid_mean(ds, "yield-mai-noirr", 1992, 1994)
+    assert grid.dims == ("lat", "lon")
+    assert (grid == 1993.0).all()
+
+
+def test_percent_change_grid_computes_relative_difference_elementwise():
+    future = xr.DataArray([[110.0, 50.0]], dims=["lat", "lon"])
+    baseline = xr.DataArray([[100.0, 25.0]], dims=["lat", "lon"])
+    result = percent_change_grid(future, baseline)
+    assert result.values[0, 0] == pytest.approx(10.0)
+    assert result.values[0, 1] == pytest.approx(100.0)
+
+
+def test_percent_change_grid_returns_nan_for_zero_baseline_cells_not_a_crash():
+    future = xr.DataArray([[110.0, 5.0]], dims=["lat", "lon"])
+    baseline = xr.DataArray([[100.0, 0.0]], dims=["lat", "lon"])
+    result = percent_change_grid(future, baseline)
+    assert result.values[0, 0] == pytest.approx(10.0)
+    assert np.isnan(result.values[0, 1])

@@ -23,7 +23,12 @@ function buildClimateIndicators(
   const tempChange = Number((warmingLevelC * (1.1 + rand() * 0.6)).toFixed(1));
   // Synthetic, not a real precip response — some regions dry, some wet, both
   // plausible under warming, so this can land on either side of zero.
-  const precipChange = Number(((rand() - 0.5) * 10 * warmingLevelC).toFixed(1));
+  const precipChangePct = Number(((rand() - 0.5) * 10 * warmingLevelC).toFixed(1));
+  // Synthetic mm/day counterpart — same sign as the percent figure (a demo shouldn't show precip
+  // rising in % but falling in mm), independently scaled magnitude. Two fields, not one: percent
+  // change is only valid for a continuous ratio-scale quantity with a true zero, and even then a
+  // small baseline can make it technically-correct-but-misleading — see types.ts.
+  const precipChangeAbs = Number((Math.sign(precipChangePct) * rand() * 2 * warmingLevelC).toFixed(2));
   // Dry-day counts trend up with warming in this synthetic model; never
   // negative, since "fewer dry days" isn't the story this mock is telling.
   const consecutiveDryDays = Math.round(rand() * 5 * warmingLevelC);
@@ -39,10 +44,16 @@ function buildClimateIndicators(
       value: tempChange,
     },
     {
-      id: "precip_change",
+      id: "precip_change_abs",
+      title: `Local precipitation change at ${warmingLevelC}°C global warming`,
+      unit: "mm/day",
+      value: precipChangeAbs,
+    },
+    {
+      id: "precip_change_pct",
       title: `Local precipitation change at ${warmingLevelC}°C global warming`,
       unit: "% precip change",
-      value: precipChange,
+      value: precipChangePct,
     },
     {
       id: "consecutive_dry_days",

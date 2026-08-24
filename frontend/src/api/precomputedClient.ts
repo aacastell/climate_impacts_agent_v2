@@ -160,7 +160,15 @@ export class PrecomputedApiClient implements ApiClient {
         value: matchedWindow.tas_change,
       },
       {
-        id: "precip_change",
+        // TODO: this whole client reads a JSON shape from the old 5-region precompute output,
+        // which no longer exists — the real process stage now writes per-(field,window) NetCDF
+        // objects (processed/global/pr_abs/y{year}.nc, pr_pct/y{year}.nc, etc.), not a combined
+        // regions.json. Renamed here only to keep this file type-checking against the current
+        // ClimateIndicatorId union; not wired to the real output. Needs a real rewrite once a
+        // query-time regional API exists to actually serve this shape. Not adding a
+        // precip_change_pct entry here for the same reason — no sense building more on top of
+        // an already-fictional interface.
+        id: "precip_change_abs",
         title: `Local precipitation change at ${matchedWindow.gwl_c}°C global warming`,
         unit: "% precip change",
         value: matchedWindow.pr_change,

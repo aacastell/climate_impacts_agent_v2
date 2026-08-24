@@ -25,9 +25,18 @@ export interface MapCenter {
 // between them client-side; all of them arrive in the same response, since
 // per ADR-004 the underlying grids are precomputed and small relative to a
 // single resolved region, not fetched or computed per toggle.
+//
+// precip_change_abs/precip_change_pct, not one "precip_change": percent change is only valid
+// for continuous quantities with a true zero where it's the domain-conventional framing, and
+// even then a small-baseline cell can make it technically correct but misleading (arid regions)
+// — so both are shown, not one picked on the data's behalf. temp_change has no percent
+// counterpart at all: temperature has no true zero, so percent change is invalid, not just
+// unhelpful. Matches the same distinction the backend's process stage makes (see
+// pipeline/README.md's "Not every field gets a single output" section).
 export type ClimateIndicatorId =
   | "temp_change"
-  | "precip_change"
+  | "precip_change_abs"
+  | "precip_change_pct"
   | "consecutive_dry_days"
   | "extreme_heat_days";
 

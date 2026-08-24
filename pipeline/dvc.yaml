@@ -129,9 +129,10 @@ stages:
     outs:
       - manifests/lpjml_rice_future.json
 
-  process_regions:
-    cmd: python -m climate_pipeline.process.run --bucket climate-impacts-isimip-raw-148323855774 --manifest-dir manifests --work-dir work
+  process_global:
+    cmd: python -m climate_pipeline.process.run --bucket climate-impacts-isimip-raw-148323855774 --manifest-dir manifests --work-dir work --out-dir processed_global
     deps:
+      - manifests/tas_preindustrial.json
       - manifests/tas_baseline.json
       - manifests/tas_future.json
       - manifests/pr_baseline.json
@@ -146,9 +147,9 @@ stages:
       - manifests/lpjml_rice_future.json
       - climate_pipeline/fetch/agriculture.py
       - climate_pipeline/fetch/manifest.py
-      - climate_pipeline/process/regions.py
       - climate_pipeline/process/warming_levels.py
       - climate_pipeline/process/extract.py
+      - climate_pipeline/process/indices.py
       - climate_pipeline/process/run.py
     outs:
-      - manifests/processed_regions.json
+      - manifests/global_precompute_manifest.json

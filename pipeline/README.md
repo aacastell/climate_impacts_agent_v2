@@ -106,38 +106,58 @@ process stage's job, done from this full span; fetch's job is just making
 the complete span available to slice from.
 
 **`climate_pipeline/process/`** — the process stage: turns the raw NetCDF fetch already pulled
-into real values for the frontend's 5 known demo regions (`regions.py` — Occitanie, Iowa,
-Punjab, Nile Delta, Mekong Delta, duplicated from `frontend/src/api/mockClient.ts`'s
-`KNOWN_REGIONS` since there's no shared build step between this Python pipeline and the
-TypeScript frontend). Nearest-grid-cell extraction, not area-weighted — no region *boundary*
-polygons exist anywhere in this repo yet for these 5 named places, only the lon/lat points
-already in the mock client, so there's nothing to area-weight against (ADR-006 Step 3 describes
-the eventual area-weighted design; revisit once real boundaries exist).
+into the real **global** precomputed grid. Supersedes an earlier 5-fixed-point MVP (nearest-cell
+extraction for 5 hardcoded demo regions) — that version is gone; regional extraction is
+explicitly out of scope for this stage now, deferred to whatever query-time API eventually reads
+from this output (ADR-006 Step 3: regional aggregation stays query-time because the region
+vocabulary is unbounded — this stage no longer narrows that down to 5 names).
 
-**This is a deliberate, temporary narrowing of ADR-006 Step 3's own reasoning.** That ADR argues
-regional aggregation has to stay query-time because the region vocabulary is unbounded — true in
-general, but not true yet here: there's no free-text region resolver, only these 5 hardcoded
-names. Precomputing directly for a fixed 5-region set is a reasonable MVP shortcut on that basis,
-not a redesign of ADR-006. It stops being valid the moment free-text region resolution exists.
+**Only change-from-baseline gets stored — baseline (1995–2014) itself is intermediate, never a
+persisted output.** For every field (`tas`, `pr`, `consecutive_dry_days`, `extreme_heat_days`,
+and each of the 4 crops' yield), the stored value is `window - baseline` (absolute °C for `tas`
+and the two day-count indices, % for `pr` and yield) — never the raw window or baseline mean on
+its own.
 
-Warming levels are real, not synthetic: `warming_levels.py` looks up the calendar year GFDL-ESM4
-under SSP3-7.0 actually crosses each of 1.5°C, 2.0°C, and 3.0°C (source: the IPCC AR6 WGI Atlas's
-own published warming-level table — read live, not recalled, same discipline as the pDSSAT
-coverage check above). 4.0°C isn't reached by this model/scenario pairing within the century and
-is excluded outright, not substituted with a nearby number. Each level gets its own 20-year
-window centered on that crossing year — e.g. 1.5°C's window is 2031–2051 — sliced directly from
-the raw driver/yield data already fetched (2026–2100 covers every window with room to spare).
+**Global warming level (GWL) is self-computed, not looked up from a fixed table.** For every year
+Y from 2025 to 2091 (67 years — bounded by the real fetched future span, 2015–2100, and a 20-year
+window `[Y-10, Y+9]` needing to fit entirely inside it), the area-weighted global mean `tas` over
+that window, minus the preindustrial reference, *is* GWL(Y) — it falls out of the same
+computation the per-cell change grids already need, not a separate lookup. The preindustrial
+reference (1850–1900, the IPCC standard) is real ISIMIP data, not an external number: it's simply
+the start of the same `historical` GFDL-ESM4 dataset this project's own baseline already comes
+from (verified live — the earliest file is `..._historical_tas_global_daily_1850_1850.nc`),
+fetched via `fetch_tas_preindustrial`. An earlier pass in this project used a 3-checkpoint table
+from the IPCC AR6 Atlas (1.5°C/2.0°C/3.0°C only) — that's gone too, replaced by this per-year
+computation.
 
-**Two indicators stay synthetic for this pass: `consecutive_dry_days` and `extreme_heat_days`.**
-Computing them for real needs a specific climate-index methodology (a WMO-style consecutive-dry-
-day run length, a heat-day threshold in °C) that hasn't been decided anywhere in this project.
-Inventing a threshold here would be exactly the kind of guess this pipeline has consistently
-avoided elsewhere — these two stay mocked in the frontend until that methodology is specified.
+**`consecutive_dry_days` and `extreme_heat_days` are real now, not synthetic.** Dry days use the
+ETCCDI CDD standard (longest run of consecutive days with precip < 1mm within a calendar year) —
+a real, still-widely-used index despite the ETCCDI program itself having ended in 2018. Extreme
+heat uses a 35°C threshold — a single global value, not crop-specific, a deliberate documented
+tradeoff (empirical crop-specific thresholds, e.g. ~34.8°C for maize, are more scientifically
+defensible per current literature, but would need a credible sourced number per crop and
+quadruple storage; 35°C is the more standard of the two commonly-cited round-number thresholds).
+Both are computed per calendar year first, then averaged across each 20-year window — see
+`process/indices.py`.
 
-**Yield is a single-value point estimate, not a range.** pDSSAT was already dropped for this
-MVP (below), leaving only LPJmL — one crop model can't produce the two-model spread the frontend
-used to display. `process/run.py` outputs one `{crop}_yield_change_pct` per window, and the
-frontend's disclaimer language changed to match (single-model framing, not a fabricated range).
+**Not every field gets a single output — some get two.** Percent change is only valid for
+continuous, ratio-scale quantities with a true zero where it's the domain-conventional framing
+(`pr`, yield) — invalid for temperature (no true zero) and misleading for the two day-count
+indices (near-zero baselines are common and produce meaningless swings). Where percent *is*
+valid, both absolute and percent are stored, not one chosen on the data's behalf — a
+small-baseline cell (arid precip, marginal cropland) can make percent change technically correct
+but misleading, so the choice is left to whatever consumes this later rather than picked here.
+`tas`/`consecutive_dry_days`/`extreme_heat_days` write one field each (bare name); `pr` and each
+of the 4 crops write two (`{field}_abs`, `{field}_pct`) — see `run.py`'s `FIELD_VARIANTS`.
+
+**Storage: one small NetCDF object per (field-variant, window), not one large array.** 67 windows
+× 13 field-variants (3 single + 5 doubled) = 871 objects, each ~1MB (a single 720×360 grid) →
+~871MB total. This layout is why the canonical store's format doesn't need Zarr's
+chunked-partial-read sophistication (worked through via a real local benchmark, not assumed) —
+every object is already small enough that downloading it whole, in any reasonably convenient
+format, is fast regardless of chunking. Output keys: `processed/global/{field}/y{year}.nc`, plus
+`processed/global/manifest.json` listing every object's `{field, kind, year, gwl_c}` so a future
+query-time consumer can find the right key directly.
 
 **`buildspec.yml`** — runs on CodeBuild, manually triggered only (no
 webhook — see ADR-006 Step 7, this pipeline updates on ISIMIP/GGCMI's own
@@ -146,7 +166,7 @@ release cadence, not continuously). Bootstraps DVC fresh on every run
 depends on DVC state surviving between runs, since skip-if-unchanged is
 handled by the S3 checksum check above, not by a persisted `dvc.lock`.
 
-`dvc repro` runs the whole DAG in one build, `process_regions` included — so for now, the process
+`dvc repro` runs the whole DAG in one build, `process_global` included — so for now, the process
 stage runs on the *same* CodeBuild project as fetch (`ClimateImpactsIsimipFetch`), not a separate
 one. ADR-006 explicitly leaves the process stage's compute runner as its own evaluation, separate
 from fetch's — this isn't that evaluation, just the simplest thing that works before any real

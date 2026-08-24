@@ -3,7 +3,8 @@ import "./IndicatorToggle.css";
 
 const INDICATOR_LABELS: Record<ClimateIndicatorId, string> = {
   temp_change: "Temperature",
-  precip_change: "Precipitation",
+  precip_change_abs: "Precipitation (mm)",
+  precip_change_pct: "Precipitation (%)",
   consecutive_dry_days: "Dry days",
   extreme_heat_days: "Extreme heat",
 };

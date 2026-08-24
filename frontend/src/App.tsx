@@ -20,7 +20,10 @@ const SECTOR_INTENSITY_SCALE = 40;
 // true for indicators where either direction can be the concerning one.
 const INDICATOR_INTENSITY: Record<ClimateIndicatorId, { scale: number; useAbs?: boolean }> = {
   temp_change: { scale: 5 },
-  precip_change: { scale: 25, useAbs: true },
+  // mm/day change is typically a small number — 3mm as a plausible-magnitude visualization
+  // scale, same rough-estimate basis as every other value in this table, not derived from data.
+  precip_change_abs: { scale: 3, useAbs: true },
+  precip_change_pct: { scale: 25, useAbs: true },
   consecutive_dry_days: { scale: 25 },
   extreme_heat_days: { scale: 40 },
 };

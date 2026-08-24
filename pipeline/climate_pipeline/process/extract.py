@@ -1,9 +1,10 @@
 """Pure(-ish) extraction/statistics functions for the process stage.
 
-Nearest-grid-cell extraction, not area-weighted — see pipeline/README.md's MVP note: no region
-boundary polygons exist yet for these 5 named regions, only lon/lat points (regions.py), so
-there's nothing to area-weight against. Revisit once real region boundaries exist (ADR-006 Step 3
-describes the eventual area-weighted design).
+Two families of functions here: point-based (nearest-grid-cell to one lon/lat — the original
+5-fixed-region MVP's extraction method, kept but no longer called by run.py now that regional
+extraction is out of scope for this pipeline — see ADR-006 Step 3, regional aggregation stays
+query-time) and grid-wide (whole 720x360 field at once — what the real global precompute grid
+actually needs).
 
 Climate driver files (tas, pr) use standard CF time/lat/lon dimensions. LPJmL yield output files
 do not: per the ISIMIP/GGCMI protocol, crop yield is reported per growing season, not per
@@ -11,13 +12,13 @@ calendar date, so these files use a unitless integer season-index coordinate ins
 time axis. This module derives the real calendar year for each season index from that
 coordinate's own `units` attribute (e.g. "growing seasons since 1850-01-01") rather than
 hardcoding a start year, and fails loudly if that attribute doesn't match the documented
-convention — this hasn't yet been verified against a real downloaded file (the fetch build was
-still running when this was written), so treat yield_season_start_year's behavior as unconfirmed
-until checked against one.
+convention — this hasn't yet been verified against a real downloaded file, so treat
+yield_season_start_year's behavior as unconfirmed until checked against one.
 """
 
 import re
 
+import numpy as np
 import xarray as xr
 
 _SEASON_UNITS_RE = re.compile(r"since (\d{4})")
@@ -73,7 +74,55 @@ def absolute_change(future_mean: float, baseline_mean: float) -> float:
 def percent_change(future_mean: float, baseline_mean: float) -> float:
     """Percent change from baseline — e.g. precipitation, yield. A zero baseline has no
     meaningful percent change; callers should treat that as a data problem, not silently divide
-    by it."""
+    by it. Scalar only — `baseline_mean == 0` on an array gives an array of booleans, not a
+    single truth value, so this raises TypeError-adjacent confusion if handed a grid; use
+    percent_change_grid for that instead."""
     if baseline_mean == 0:
         raise ValueError("Cannot compute percent change from a zero baseline")
     return (future_mean - baseline_mean) / baseline_mean * 100
+
+
+def percent_change_grid(future_grid: xr.DataArray, baseline_grid: xr.DataArray) -> xr.DataArray:
+    """Grid-wide percent change from baseline. Unlike the scalar percent_change, a zero-baseline
+    cell doesn't raise — a global grid legitimately has cells with no meaningful baseline (ocean,
+    non-arable land for yield), and one such cell shouldn't crash the whole computation. Those
+    cells become NaN, not a fabricated number and not a crash."""
+    return xr.where(baseline_grid != 0, (future_grid - baseline_grid) / baseline_grid * 100, np.nan)
+
+
+def area_weights(lat: xr.DataArray) -> xr.DataArray:
+    """cos(latitude), normalized to mean 1 — corrects for a lat/lon grid's cells shrinking in
+    real area toward the poles despite equal angular size. Standard technique, needed for any
+    true *global* mean (as opposed to a naive unweighted mean across cells, which would
+    overweight the poles)."""
+    weights = np.cos(np.deg2rad(lat))
+    return weights / weights.mean()
+
+
+def global_area_weighted_mean(dataset: xr.Dataset, variable: str, start_year: int, end_year: int) -> float:
+    """Area-weighted global mean of `variable` over calendar years [start_year, end_year] — a
+    single scalar, e.g. for the GWL calculation (warming_levels.py)."""
+    windowed = dataset[variable].sel(time=slice(f"{start_year}-01-01", f"{end_year}-12-31"))
+    weights = area_weights(dataset["lat"])
+    return float(windowed.weighted(weights).mean().item())
+
+
+def grid_mean(dataset: xr.Dataset, variable: str, start_year: int, end_year: int) -> xr.DataArray:
+    """Per-cell mean of `variable` over calendar years [start_year, end_year] — the full spatial
+    grid, not a single point or a spatial reduction. This is the actual per-cell change-grid
+    input; no area weighting here, since nothing is being spatially reduced."""
+    windowed = dataset[variable].sel(time=slice(f"{start_year}-01-01", f"{end_year}-12-31"))
+    return windowed.mean(dim="time")
+
+
+def yield_grid_mean(
+    dataset: xr.Dataset, variable: str, start_year: int, end_year: int, time_dim: str = "time"
+) -> xr.DataArray:
+    """Per-cell mean of a yield `variable` over calendar years [start_year, end_year] — the
+    grid-wide counterpart to nearest_point_yield_mean, converting the season-index coordinate to
+    calendar years first."""
+    season_start = yield_season_start_year(dataset, time_dim)
+    season_years = season_start + dataset[time_dim].values
+    in_window = (season_years >= start_year) & (season_years <= end_year)
+    windowed = dataset[variable].isel({time_dim: in_window})
+    return windowed.mean(dim=time_dim)
