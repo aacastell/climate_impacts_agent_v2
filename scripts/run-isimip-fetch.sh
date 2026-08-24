@@ -26,7 +26,14 @@ MAX_WAIT_MINUTES=50
 # measured ~47 min, over the cap. Agriculture's 8 stages are one LPJmL
 # output file each, far smaller than the climate driver files, so they're
 # grouped into a single build.
-GROUPS=(
+#
+# Named FETCH_GROUPS, not GROUPS: `GROUPS` is a bash builtin special
+# variable (the current user's real UNIX group IDs, like $UID/$PPID) —
+# assigning to it is a silent no-op, so a loop over "${GROUPS[@]}" was
+# actually iterating the real system group list, not this array, and every
+# `run-codebuild.sh` call got the first real GID (e.g. 20) as DVC_TARGET
+# instead of a stage name. Confirmed against `id -G` — exact match.
+FETCH_GROUPS=(
   "fetch_tas_baseline"
   "fetch_tas_future"
   "fetch_pr_baseline"
@@ -34,7 +41,7 @@ GROUPS=(
   "fetch_agriculture_maize_baseline fetch_agriculture_maize_future fetch_agriculture_spring_wheat_baseline fetch_agriculture_spring_wheat_future fetch_agriculture_soy_baseline fetch_agriculture_soy_future fetch_agriculture_rice_baseline fetch_agriculture_rice_future"
 )
 
-for group in "${GROUPS[@]}"; do
+for group in "${FETCH_GROUPS[@]}"; do
   echo "==> Fetch group: $group"
   "$ROOT/scripts/run-codebuild.sh" "$PROJECT_NAME" "$MAX_WAIT_MINUTES" "$group"
 done
