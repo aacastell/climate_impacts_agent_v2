@@ -7,3 +7,6 @@ dvc[s3]>=3.50.0
 xarray>=2024.3.0
 netCDF4>=1.6.5
 numpy>=1.26.0
+# open_mfdataset (used to concatenate each variable's decadal files) requires dask to combine
+# them lazily — a real production dependency for the process stage, not just for benchmarking.
+dask>=2024.5.0

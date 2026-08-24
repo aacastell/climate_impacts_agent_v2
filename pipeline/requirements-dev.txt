@@ -1,2 +1,9 @@
 -r requirements.txt
 pytest>=8.0.0,<9.0.0
+# Only for pipeline/benchmarks/storage_format_benchmark.py — the canonical storage format
+# decision (ADR-006: "Zarr is a candidate, unproven") isn't made yet, so zarr isn't a real
+# pipeline dependency until it is. Dev-only until that changes. dask is already pulled in via
+# requirements.txt (a real process-stage dependency now, not just for this benchmark).
+zarr>=2.18.0,<3.0.0
+h5netcdf>=1.3.0
+h5py>=3.11.0
