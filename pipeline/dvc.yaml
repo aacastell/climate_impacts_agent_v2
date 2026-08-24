@@ -39,8 +39,8 @@ stages:
     outs:
       - manifests/pr_future.json
 
-  fetch_agriculture_baseline:
-    cmd: python -m climate_pipeline.fetch.agriculture --window baseline --bucket climate-impacts-isimip-raw-148323855774 --manifest-dir manifests
+  fetch_agriculture_maize_baseline:
+    cmd: python -m climate_pipeline.fetch.agriculture --crop maize --window baseline --bucket climate-impacts-isimip-raw-148323855774 --manifest-dir manifests
     deps:
       - climate_pipeline/fetch/isimip_client.py
       - climate_pipeline/fetch/stream_to_s3.py
@@ -49,8 +49,8 @@ stages:
     outs:
       - manifests/lpjml_maize_baseline.json
 
-  fetch_agriculture_future:
-    cmd: python -m climate_pipeline.fetch.agriculture --window future --bucket climate-impacts-isimip-raw-148323855774 --manifest-dir manifests
+  fetch_agriculture_maize_future:
+    cmd: python -m climate_pipeline.fetch.agriculture --crop maize --window future --bucket climate-impacts-isimip-raw-148323855774 --manifest-dir manifests
     deps:
       - climate_pipeline/fetch/isimip_client.py
       - climate_pipeline/fetch/stream_to_s3.py
@@ -58,3 +58,63 @@ stages:
       - climate_pipeline/fetch/agriculture.py
     outs:
       - manifests/lpjml_maize_future.json
+
+  fetch_agriculture_spring_wheat_baseline:
+    cmd: python -m climate_pipeline.fetch.agriculture --crop spring_wheat --window baseline --bucket climate-impacts-isimip-raw-148323855774 --manifest-dir manifests
+    deps:
+      - climate_pipeline/fetch/isimip_client.py
+      - climate_pipeline/fetch/stream_to_s3.py
+      - climate_pipeline/fetch/manifest.py
+      - climate_pipeline/fetch/agriculture.py
+    outs:
+      - manifests/lpjml_spring_wheat_baseline.json
+
+  fetch_agriculture_spring_wheat_future:
+    cmd: python -m climate_pipeline.fetch.agriculture --crop spring_wheat --window future --bucket climate-impacts-isimip-raw-148323855774 --manifest-dir manifests
+    deps:
+      - climate_pipeline/fetch/isimip_client.py
+      - climate_pipeline/fetch/stream_to_s3.py
+      - climate_pipeline/fetch/manifest.py
+      - climate_pipeline/fetch/agriculture.py
+    outs:
+      - manifests/lpjml_spring_wheat_future.json
+
+  fetch_agriculture_soy_baseline:
+    cmd: python -m climate_pipeline.fetch.agriculture --crop soy --window baseline --bucket climate-impacts-isimip-raw-148323855774 --manifest-dir manifests
+    deps:
+      - climate_pipeline/fetch/isimip_client.py
+      - climate_pipeline/fetch/stream_to_s3.py
+      - climate_pipeline/fetch/manifest.py
+      - climate_pipeline/fetch/agriculture.py
+    outs:
+      - manifests/lpjml_soy_baseline.json
+
+  fetch_agriculture_soy_future:
+    cmd: python -m climate_pipeline.fetch.agriculture --crop soy --window future --bucket climate-impacts-isimip-raw-148323855774 --manifest-dir manifests
+    deps:
+      - climate_pipeline/fetch/isimip_client.py
+      - climate_pipeline/fetch/stream_to_s3.py
+      - climate_pipeline/fetch/manifest.py
+      - climate_pipeline/fetch/agriculture.py
+    outs:
+      - manifests/lpjml_soy_future.json
+
+  fetch_agriculture_rice_baseline:
+    cmd: python -m climate_pipeline.fetch.agriculture --crop rice --window baseline --bucket climate-impacts-isimip-raw-148323855774 --manifest-dir manifests
+    deps:
+      - climate_pipeline/fetch/isimip_client.py
+      - climate_pipeline/fetch/stream_to_s3.py
+      - climate_pipeline/fetch/manifest.py
+      - climate_pipeline/fetch/agriculture.py
+    outs:
+      - manifests/lpjml_rice_baseline.json
+
+  fetch_agriculture_rice_future:
+    cmd: python -m climate_pipeline.fetch.agriculture --crop rice --window future --bucket climate-impacts-isimip-raw-148323855774 --manifest-dir manifests
+    deps:
+      - climate_pipeline/fetch/isimip_client.py
+      - climate_pipeline/fetch/stream_to_s3.py
+      - climate_pipeline/fetch/manifest.py
+      - climate_pipeline/fetch/agriculture.py
+    outs:
+      - manifests/lpjml_rice_future.json

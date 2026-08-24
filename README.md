@@ -41,15 +41,24 @@ is checked against a held-out projection before anything is published
 | Crops | Maize, spring wheat, soy, rice |
 | Climate model | GFDL-ESM4 |
 | Scenario | SSP3-7.0 |
-| Crop models | pDSSAT, LPJmL |
+| Crop models | LPJmL only (MVP — see note below) |
 | Run specifiers | `2015soc` (no adaptation); both CO₂ specifications, reported as a range |
 | Corpus | IPCC reports |
+
+**MVP note, not a permanent scope decision:** pDSSAT is dropped entirely for now. Verified
+directly against ISIMIP's catalog — pDSSAT has no SSP3-7.0 output at all for GFDL-ESM4 (only
+`historical`, `ssp126`, `ssp585`), so the pDSSAT/LPJmL combination this scope table used to name
+cannot produce a future projection under this system's own climate model and scenario. Baseline
+validation still has both models available; only the future/warming-level yield projection is
+affected. Accepted consequence, not discovered later: **there is currently no second crop model
+to range against for yield projections** — revisit after MVP.
 
 **Two facts that must appear in every answer**, because they are easy to misread as forecasts:
 
 - `2015soc` means management is frozen at 2015 conditions — **no adaptation is represented**.
-- A single climate model provides **no climate-model uncertainty range**. Two crop models give
-  a range, not a distribution: report the range, never a mean or confidence interval.
+- A single climate model provides **no climate-model uncertainty range**. Normally two crop
+  models would give a range, not a distribution — but see the MVP note above: right now there is
+  only one crop model, so the yield figure is a single-model estimate, not a range either.
 
 **Target scale:** roughly 1,000 users. Roughly 2–10 seconds latency for a normal request; roughly
 30 seconds is acceptable for a cache miss or other exceptional case. This is the number that

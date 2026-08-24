@@ -37,14 +37,6 @@ def search_dataset(**specifiers) -> dict:
     return detail.json()
 
 
-def file_for_year_range(dataset: dict, year_range: str) -> dict:
-    """Pick the file within a dataset matching a year-range suffix in its filename (e.g. "2051_2060")."""
-    for file_entry in dataset["files"]:
-        if year_range in file_entry["name"]:
-            return file_entry
-    raise ValueError(f"No file matching {year_range} in dataset {dataset['id']}")
-
-
 def only_file(dataset: dict) -> dict:
     """A dataset's single file, for sectors whose output isn't decade-chunked (agriculture, biome)."""
     files = dataset["files"]
