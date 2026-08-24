@@ -23,6 +23,10 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 # configured timeout, well under what one build covering all 12 fetch
 # stages needs. See scripts/run-isimip-fetch.sh and pipeline/README.md.
 "$ROOT/scripts/run-isimip-fetch.sh"
+# Its own script, its own step — fetch and process are separate DVC stages for real reasons
+# (ADR-006 Step 8), not just separate commands, so their triggers stay separate too. See
+# scripts/run-process-global.sh and pipeline/README.md.
+"$ROOT/scripts/run-process-global.sh"
 
 DOMAIN=$(python3 -c "import json; print(json.load(open('$ROOT/infra/outputs.json'))['ClimateImpactsFrontendHosting']['DistributionDomainName'])")
 echo "==> Live at https://$DOMAIN"
