@@ -25,5 +25,9 @@ phases:
       # ("Why this runs as 5 separate builds, not one") for why that's
       # necessary on this account. Unset/empty runs the full graph, same as
       # before, so a manual `dvc repro` locally still behaves as expected.
-      - dvc repro ${DVC_TARGET:-}
+      # Plain `$DVC_TARGET` and an explicit if/else, not `${DVC_TARGET:-}` —
+      # that parameter-expansion-with-default syntax failed here (exit 255
+      # on the literal unexpanded string), so this avoids it entirely rather
+      # than debugging blind which shell in this image doesn't like it.
+      - if [ -n "$DVC_TARGET" ]; then dvc repro $DVC_TARGET; else dvc repro; fi
       - dvc push
