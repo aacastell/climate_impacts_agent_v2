@@ -118,3 +118,27 @@ stages:
       - climate_pipeline/fetch/agriculture.py
     outs:
       - manifests/lpjml_rice_future.json
+
+  process_regions:
+    cmd: python -m climate_pipeline.process.run --bucket climate-impacts-isimip-raw-148323855774 --manifest-dir manifests --work-dir work
+    deps:
+      - manifests/tas_baseline.json
+      - manifests/tas_future.json
+      - manifests/pr_baseline.json
+      - manifests/pr_future.json
+      - manifests/lpjml_maize_baseline.json
+      - manifests/lpjml_maize_future.json
+      - manifests/lpjml_spring_wheat_baseline.json
+      - manifests/lpjml_spring_wheat_future.json
+      - manifests/lpjml_soy_baseline.json
+      - manifests/lpjml_soy_future.json
+      - manifests/lpjml_rice_baseline.json
+      - manifests/lpjml_rice_future.json
+      - climate_pipeline/fetch/agriculture.py
+      - climate_pipeline/fetch/manifest.py
+      - climate_pipeline/process/regions.py
+      - climate_pipeline/process/warming_levels.py
+      - climate_pipeline/process/extract.py
+      - climate_pipeline/process/run.py
+    outs:
+      - manifests/processed_regions.json
