@@ -19,5 +19,11 @@ phases:
       # nothing DVC-side that needs to survive between ephemeral runs.
       - dvc init --subdir -f
       - dvc remote add -d isimip-raw s3://climate-impacts-isimip-raw-148323855774/dvc-cache -f
-      - dvc repro
+      # DVC_TARGET, when set (via CodeBuild's --environment-variables-override,
+      # see scripts/run-isimip-fetch.sh), limits this run to specific
+      # dvc.yaml stages instead of the whole graph — see pipeline/README.md
+      # ("Why this runs as 5 separate builds, not one") for why that's
+      # necessary on this account. Unset/empty runs the full graph, same as
+      # before, so a manual `dvc repro` locally still behaves as expected.
+      - dvc repro ${DVC_TARGET:-}
       - dvc push

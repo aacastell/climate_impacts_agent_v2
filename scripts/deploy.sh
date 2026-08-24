@@ -18,12 +18,11 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 "$ROOT/scripts/check-aws-credentials.sh"
 "$ROOT/scripts/provision-infra.sh"
 "$ROOT/scripts/run-codebuild.sh" "ClimateImpactsFrontendBuild"
-# 235 min wait, just under the CodeBuild project's own 4-hour timeout
-# (infra/stacks/isimip_fetch_build_project_stack.py) — real transfer
-# volume here is tens of GB, untested at the time this was set; the
-# default 30-minute wait (fine for the frontend build) would very likely
-# time out this script before CodeBuild itself does.
-"$ROOT/scripts/run-codebuild.sh" "ClimateImpactsIsimipFetch" 235
+# Runs as 5 separate CodeBuild builds, not one call here — this account's
+# CodeBuild builds are capped at ~45 minutes regardless of the project's own
+# configured timeout, well under what one build covering all 12 fetch
+# stages needs. See scripts/run-isimip-fetch.sh and pipeline/README.md.
+"$ROOT/scripts/run-isimip-fetch.sh"
 
 DOMAIN=$(python3 -c "import json; print(json.load(open('$ROOT/infra/outputs.json'))['ClimateImpactsFrontendHosting']['DistributionDomainName'])")
 echo "==> Live at https://$DOMAIN"

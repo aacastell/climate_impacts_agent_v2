@@ -16,16 +16,31 @@ if [ -z "${AWS_PROFILE:-}" ] && aws configure list-profiles 2>/dev/null | grep -
   export AWS_PROFILE="dev"
 fi
 
-PROJECT_NAME="${1:?Usage: run-codebuild.sh <codebuild-project-name> [max-wait-minutes]}"
+PROJECT_NAME="${1:?Usage: run-codebuild.sh <codebuild-project-name> [max-wait-minutes] [dvc-target-override]}"
 # Default (30 min) fits the frontend build, which should fail fast if
 # something's wrong. Long-running builds (e.g. the ISIMIP fetch, real
 # transfer volume in the tens of GB) need a longer wait explicitly passed
 # as the second argument — this script has no way to know a project's
 # expected duration on its own.
 MAX_WAIT_MINUTES="${2:-30}"
+# Optional: overrides DVC_TARGET for this one build only, so the ISIMIP
+# fetch project can be run against a subset of dvc.yaml's stages instead of
+# the whole graph — see scripts/run-isimip-fetch.sh and pipeline/buildspec.yml.
+DVC_TARGET_OVERRIDE="${3:-}"
 
 echo "==> Starting CodeBuild run for $PROJECT_NAME (builds main on GitHub, not local files)"
-BUILD_ID=$(aws codebuild start-build --project-name "$PROJECT_NAME" --query 'build.id' --output text)
+if [ -n "$DVC_TARGET_OVERRIDE" ]; then
+  echo "==> DVC_TARGET override: $DVC_TARGET_OVERRIDE"
+  # JSON, not shorthand syntax: the value is space-separated stage names,
+  # and shorthand's comma-delimited field parsing is the wrong tool for a
+  # value that isn't a single simple token.
+  ENV_OVERRIDE_JSON=$(python3 -c "import json,sys; print(json.dumps([{'name': 'DVC_TARGET', 'value': sys.argv[1], 'type': 'PLAINTEXT'}]))" "$DVC_TARGET_OVERRIDE")
+  BUILD_ID=$(aws codebuild start-build --project-name "$PROJECT_NAME" \
+    --environment-variables-override "$ENV_OVERRIDE_JSON" \
+    --query 'build.id' --output text)
+else
+  BUILD_ID=$(aws codebuild start-build --project-name "$PROJECT_NAME" --query 'build.id' --output text)
+fi
 echo "==> Build started: $BUILD_ID"
 
 MAX_CHECKS=$((MAX_WAIT_MINUTES * 6)) # 6 checks/minute at 10s intervals
