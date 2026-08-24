@@ -1,0 +1,6 @@
+# Floor, not a pin — see repo README convention on not hard-coding figures
+# that go stale invisibly. `pip install -r requirements.txt` resolves to the
+# current release.
+httpx>=0.27.0
+boto3>=1.34.0
+dvc[s3]>=3.50.0

@@ -1,0 +1,23 @@
+version: 0.2
+
+# Manually triggered only (scripts/run-codebuild.sh) — no webhook, no push
+# trigger. See ADR-006 Step 7: this pipeline updates on ISIMIP/GGCMI's own
+# release cadence, not continuously, so there's nothing to watch for.
+
+phases:
+  install:
+    runtime-versions:
+      python: 3.12
+    commands:
+      - cd pipeline
+      - pip install -r requirements.txt
+  build:
+    commands:
+      # DVC bootstraps fresh every run rather than committing .dvc/ to git —
+      # skip-if-unchanged is handled at the application level (S3 checksum
+      # check in stream_to_s3.py), not via a persisted dvc.lock, so there's
+      # nothing DVC-side that needs to survive between ephemeral runs.
+      - dvc init --subdir -f
+      - dvc remote add -d isimip-raw s3://climate-impacts-isimip-raw-148323855774/dvc-cache -f
+      - dvc repro
+      - dvc push

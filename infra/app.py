@@ -6,6 +6,8 @@ import aws_cdk as cdk
 from stacks.frontend_build_project_stack import FrontendBuildProjectStack
 from stacks.frontend_hosting_stack import FrontendHostingStack
 from stacks.frontend_waf_stack import FrontendWafStack
+from stacks.isimip_data_bucket_stack import IsimipDataBucketStack
+from stacks.isimip_fetch_build_project_stack import IsimipFetchBuildProjectStack
 
 app = cdk.App()
 
@@ -36,6 +38,12 @@ hosting = FrontendHostingStack(
     cross_region_references=True,
 )
 
+isimip_data = IsimipDataBucketStack(
+    app,
+    "ClimateImpactsIsimipDataBucket",
+    env=cdk.Environment(account=account, region=home_region),
+)
+
 github_owner = app.node.try_get_context("githubOwner")
 github_repo = app.node.try_get_context("githubRepo")
 if github_owner and github_repo:
@@ -44,6 +52,15 @@ if github_owner and github_repo:
         "ClimateImpactsFrontendBuildProject",
         bucket=hosting.bucket,
         distribution=hosting.distribution,
+        github_owner=github_owner,
+        github_repo=github_repo,
+        env=cdk.Environment(account=account, region=home_region),
+    )
+
+    IsimipFetchBuildProjectStack(
+        app,
+        "ClimateImpactsIsimipFetchBuildProject",
+        bucket=isimip_data.bucket,
         github_owner=github_owner,
         github_repo=github_repo,
         env=cdk.Environment(account=account, region=home_region),

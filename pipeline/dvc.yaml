@@ -1,0 +1,60 @@
+stages:
+  fetch_tas_baseline:
+    cmd: python -m climate_pipeline.fetch.climate --variable tas --window baseline --bucket climate-impacts-isimip-raw-148323855774 --manifest-dir manifests
+    deps:
+      - climate_pipeline/fetch/isimip_client.py
+      - climate_pipeline/fetch/stream_to_s3.py
+      - climate_pipeline/fetch/manifest.py
+      - climate_pipeline/fetch/climate.py
+    outs:
+      - manifests/tas_baseline.json
+
+  fetch_tas_future:
+    cmd: python -m climate_pipeline.fetch.climate --variable tas --window future --bucket climate-impacts-isimip-raw-148323855774 --manifest-dir manifests
+    deps:
+      - climate_pipeline/fetch/isimip_client.py
+      - climate_pipeline/fetch/stream_to_s3.py
+      - climate_pipeline/fetch/manifest.py
+      - climate_pipeline/fetch/climate.py
+    outs:
+      - manifests/tas_future.json
+
+  fetch_pr_baseline:
+    cmd: python -m climate_pipeline.fetch.climate --variable pr --window baseline --bucket climate-impacts-isimip-raw-148323855774 --manifest-dir manifests
+    deps:
+      - climate_pipeline/fetch/isimip_client.py
+      - climate_pipeline/fetch/stream_to_s3.py
+      - climate_pipeline/fetch/manifest.py
+      - climate_pipeline/fetch/climate.py
+    outs:
+      - manifests/pr_baseline.json
+
+  fetch_pr_future:
+    cmd: python -m climate_pipeline.fetch.climate --variable pr --window future --bucket climate-impacts-isimip-raw-148323855774 --manifest-dir manifests
+    deps:
+      - climate_pipeline/fetch/isimip_client.py
+      - climate_pipeline/fetch/stream_to_s3.py
+      - climate_pipeline/fetch/manifest.py
+      - climate_pipeline/fetch/climate.py
+    outs:
+      - manifests/pr_future.json
+
+  fetch_agriculture_baseline:
+    cmd: python -m climate_pipeline.fetch.agriculture --window baseline --bucket climate-impacts-isimip-raw-148323855774 --manifest-dir manifests
+    deps:
+      - climate_pipeline/fetch/isimip_client.py
+      - climate_pipeline/fetch/stream_to_s3.py
+      - climate_pipeline/fetch/manifest.py
+      - climate_pipeline/fetch/agriculture.py
+    outs:
+      - manifests/lpjml_maize_baseline.json
+
+  fetch_agriculture_future:
+    cmd: python -m climate_pipeline.fetch.agriculture --window future --bucket climate-impacts-isimip-raw-148323855774 --manifest-dir manifests
+    deps:
+      - climate_pipeline/fetch/isimip_client.py
+      - climate_pipeline/fetch/stream_to_s3.py
+      - climate_pipeline/fetch/manifest.py
+      - climate_pipeline/fetch/agriculture.py
+    outs:
+      - manifests/lpjml_maize_future.json
