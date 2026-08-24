@@ -51,6 +51,7 @@ class FrontendHostingStack(Stack):
         scope: Construct,
         construct_id: str,
         web_acl_arn: str,
+        processed_data_bucket: s3.IBucket,
         **kwargs,
     ) -> None:
         super().__init__(scope, construct_id, **kwargs)
@@ -99,6 +100,34 @@ class FrontendHostingStack(Stack):
                     ),
                 ],
             ),
+        )
+
+        # Precomputed region data (process stage output, see ADR-006/pipeline/README.md) served
+        # as a second origin on this same distribution, path-scoped — exactly the pattern ADR-004
+        # Step 3 names for tile data ("a separate bucket... added as a second origin... via a
+        # path pattern e.g. /tiles/*"). Scoped to /precomputed/* only: the isimip data bucket
+        # also holds raw/ and _profiling/ prefixes that must stay unreachable through CloudFront,
+        # and a path pattern with no matching behavior for those prefixes is what keeps them out
+        # — the OAC grant itself is bucket-wide, same as CDK gives the frontend bucket above.
+        #
+        # processed_data_bucket lives in a *different* stack (IsimipDataBucketStack) than this
+        # distribution. Passing the real construct straight into with_origin_access_control()
+        # here would make CDK try to attach a bucket policy statement (in the bucket's own stack)
+        # conditioned on this distribution's ARN — but this distribution's own origin needs the
+        # bucket's domain name first, so that's a genuine CloudFormation dependency cycle between
+        # the two stacks, not just a test-harness artifact (confirmed via a failing `cdk synth`).
+        # Importing the bucket by name breaks the cycle: CDK can't auto-manage policy on an
+        # imported reference, so the read grant is instead added explicitly in
+        # IsimipDataBucketStack itself, scoped to any CloudFront distribution in this account
+        # (not this distribution's exact ARN) — see that stack for the actual policy statement.
+        imported_processed_data_bucket = s3.Bucket.from_bucket_name(
+            self, "ImportedProcessedDataBucket", processed_data_bucket.bucket_name
+        )
+        distribution.add_behavior(
+            "/precomputed/*",
+            origins.S3BucketOrigin.with_origin_access_control(imported_processed_data_bucket),
+            viewer_protocol_policy=cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+            cache_policy=cloudfront.CachePolicy.CACHING_OPTIMIZED,
         )
 
         self.bucket = bucket

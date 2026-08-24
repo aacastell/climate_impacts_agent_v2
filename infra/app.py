@@ -30,18 +30,19 @@ waf = FrontendWafStack(
     cross_region_references=True,
 )
 
-hosting = FrontendHostingStack(
-    app,
-    "ClimateImpactsFrontendHosting",
-    web_acl_arn=waf.web_acl_arn,
-    env=cdk.Environment(account=account, region=home_region),
-    cross_region_references=True,
-)
-
 isimip_data = IsimipDataBucketStack(
     app,
     "ClimateImpactsIsimipDataBucket",
     env=cdk.Environment(account=account, region=home_region),
+)
+
+hosting = FrontendHostingStack(
+    app,
+    "ClimateImpactsFrontendHosting",
+    web_acl_arn=waf.web_acl_arn,
+    processed_data_bucket=isimip_data.bucket,
+    env=cdk.Environment(account=account, region=home_region),
+    cross_region_references=True,
 )
 
 github_owner = app.node.try_get_context("githubOwner")

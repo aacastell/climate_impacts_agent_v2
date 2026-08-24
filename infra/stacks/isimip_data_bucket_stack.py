@@ -2,6 +2,7 @@ from aws_cdk import (
     CfnOutput,
     RemovalPolicy,
     Stack,
+    aws_iam as iam,
     aws_s3 as s3,
 )
 from constructs import Construct
@@ -48,6 +49,26 @@ class IsimipDataBucketStack(Stack):
             # fetched data. A stack deletion should never silently take
             # that with it.
             removal_policy=RemovalPolicy.RETAIN,
+        )
+
+        # Read access for CloudFront (see FrontendHostingStack's /precomputed/* behavior,
+        # frontend_hosting_stack.py) — granted here, in this bucket's own stack, rather than via
+        # CDK's usual automatic OAC-bucket-policy wiring: that wiring needs to reference the
+        # distribution's ARN, but the distribution's own origin needs this bucket's domain name
+        # first, which is a genuine cross-stack CloudFormation dependency cycle (confirmed via a
+        # failing `cdk synth` when this was first tried the automatic way). Scoped to any
+        # CloudFront distribution in this account, not this one specific distribution's ARN —
+        # broader than the exact-ARN condition OAC would normally set, but still only this
+        # account's own CloudFront, not the public internet; only raw/ and _profiling/ are meant
+        # to stay unreachable through CloudFront, and those still have no matching behavior at
+        # all, so this grant being bucket-wide doesn't expose them.
+        bucket.add_to_resource_policy(
+            iam.PolicyStatement(
+                actions=["s3:GetObject"],
+                resources=[bucket.arn_for_objects("*")],
+                principals=[iam.ServicePrincipal("cloudfront.amazonaws.com")],
+                conditions={"StringEquals": {"aws:SourceAccount": self.account}},
+            )
         )
 
         self.bucket = bucket
