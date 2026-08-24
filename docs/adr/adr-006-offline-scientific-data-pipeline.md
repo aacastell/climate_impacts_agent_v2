@@ -6,8 +6,9 @@ from map-shading data specifically to every expensive scientific calculation the
 **Informs:** ADR-007 (narration verification gate) — supplies the held-out yield projection.
 **Scope:** How raw ISIMIP/GGCMI data becomes the canonical precomputed grids the scientific
 query layer and map products both consume. Does not cover canonical storage format (Zarr is a
-candidate, unproven), the pipeline's compute runner (CodeBuild vs. ECS/Batch), or backend
-query-time compute topology.
+candidate, unproven), the process stage's compute runner (fetch's is decided — see Step 8 and
+Accompanying decisions), backend query-time compute topology, or the exact raw-data retention
+window.
 
 ---
 
@@ -32,6 +33,11 @@ offline.** Regional aggregation (spatial mask + weighted statistics for whatever
 resolves to) happens at query time, not precomputed, because it is cheap and inherently
 region-dependent. Counterfactual questions ("what if warming had been limited to 1.5°C") are
 kept as planned, not implemented.
+
+**Fetch and process are separate DVC stages.** Fetch streams raw data directly from ISIMIP/GGCMI
+into an S3-backed DVC remote — never through DVC's own cache — with DVC tracking a small manifest
+(S3 key, checksum, source URL) rather than the raw bytes themselves. Process starts from that
+manifest, pulls only what it needs, and produces the actual precomputed grids. See Step 8.
 
 ---
 
@@ -113,6 +119,46 @@ pipeline is triggered → `dvc repro` runs → new derived products are publishe
 version. The exact trigger mechanism — who runs it, whether it's a manual command or a
 lightweight scheduled check — is left to implementation.
 
+### Step 8 — Fetch and process are separate DVC stages, and neither routes raw bytes through DVC's own cache
+
+Fetch (raw ISIMIP/GGCMI NetCDF) and process (raw NetCDF → the baseline/window/change products
+Steps 2–3 describe) are modeled as distinct DVC stages, not one combined stage. This isn't just
+cleaner-looking modularity — it's what DVC's own caching is actually for. A single combined stage
+means any change to processing logic invalidates DVC's cache for the whole stage, forcing a
+multi-gigabyte re-download that has nothing to do with what actually changed. Separate stages let
+DVC re-run only what a given change actually affects: a processing bugfix reprocesses
+already-fetched data with zero new network traffic; a new ISIMIP/GGCMI release refetches without
+re-running processing logic that never changed. This also mirrors real independent versioning —
+raw data updates on ISIMIP/GGCMI's release cadence, processing logic updates on this project's own
+engineering cadence, and only two DVC stages let the cache tell those two kinds of change apart.
+
+**Fetch streams directly from ISIMIP into the S3-backed DVC remote — DVC never routes the raw
+bytes through its own cache at all.** The fetch stage's `cmd` queries ISIMIP's API for a file's
+URL and checksum, then streams the HTTP response directly into an S3 upload; the bytes exist only
+as a stream in flight, never fully materialized on any local disk. What DVC actually tracks as
+that stage's `outs:` is not the multi-gigabyte NetCDF — it's a small manifest (S3 key, ISIMIP's
+reported checksum, file size, source URL, fetch timestamp) written as the stream's last, cheap
+step. DVC's hashing, lineage, and `dvc push`/`pull` machinery all operate on that manifest: fast,
+small, fully standard DVC usage. This is the same shape as ADR-004's decision that the query API
+returns a *reference* to precomputed tiles, never the tile bytes themselves — the lightweight,
+frequently-touched thing (a DVC-tracked output, an API response) carries a pointer to the
+heavyweight thing, never the heavyweight thing itself.
+
+That design has a real consequence worth being explicit about: **DVC's own content hash never
+touches the actual scientific data**, since DVC only ever sees the manifest. DVC's hash answers
+"has this changed since I last saw it" for caching purposes — it has no concept of *correctness*
+against an external source; a truncated download would hash just as validly as a complete one.
+Verifying the stream against ISIMIP's own reported checksum, computed in parallel as the data
+passes through on its way to S3, is therefore not redundant with DVC's hashing — it's the *only*
+integrity check the actual payload ever receives, precisely because the manifest design routes
+DVC's own machinery around the real bytes entirely.
+
+The process stage, whenever it later runs, starts from the manifest: reads the S3 key, pulls that
+object down to its own fresh ephemeral compute (a single, later hop — S3 to compute — not a
+repeat of the fetch transfer), runs the actual scientific processing, and its own outputs get
+DVC-tracked and pushed the same way. Fetch and process are each a single efficient hop; neither
+duplicates the other's transfer.
+
 ---
 
 ## Accompanying decisions
@@ -129,12 +175,30 @@ lightweight scheduled check — is left to implementation.
   ADR-004's delivery format turns out to be (COG, tiles, or otherwise), not one file serving both
   paths directly. Both formats remain open; only the "they don't have to match" relationship
   between them is decided here.
-- **CodeBuild is not assumed as this pipeline's compute runner, despite already running the
-  frontend build.** CodeBuild is a software build service; this pipeline is scientific data
-  processing — a different workload shape (long-running, resource-heavier, data-dependent rather
-  than code-dependent) that may or may not fit the same tool well. Reusing it would be convenient,
-  not necessarily correct, and the compute-runner choice (CodeBuild vs. ECS vs. Batch vs.
-  something else) is left open rather than defaulted to what's already there.
+- **CodeBuild is decided for the fetch stage specifically — not defaulted to, evaluated.**
+  Fetch is I/O-bound (a streaming download and upload, no heavy compute) and runs infrequently,
+  per Step 7 — exactly the shape CodeBuild already handles for the frontend build, with IAM and
+  GitHub-source patterns already established in this account. Reaching for AWS Batch instead
+  would be applying "production data pipelines use Batch" ahead of an actual need, the same
+  reasoning already rejected for Airflow and Kubeflow. **The process stage's compute runner
+  remains open** — its workload shape (CPU/memory-heavier, genuinely computational) may or may
+  not fit CodeBuild as well as fetch does; that's a separate evaluation, not inherited from
+  fetch's answer.
+- **The RAG corpus follows the same DVC-tracked, S3-remote pattern as the ISIMIP/GGCMI data** —
+  its own stage, its own prefix in the same remote, for the identical reproducibility reason:
+  which corpus snapshot backed a given narration belongs in the same provenance lineage the
+  README already commits to ("data version, indicator version, model identifier, prompt
+  version"). This doesn't decide the RAG/vector-store infrastructure itself (ADR-007, still
+  open) — it only means the source documents feeding whatever gets built are versioned and
+  reproducible from day one.
+- **Raw data isn't deleted by DVC, ever, on its own — retention is a deliberate policy layered on
+  top, not decided here.** DVC's remote holds whatever's been pushed until something explicitly
+  removes it. The mechanism for eventual deletion is an S3 Lifecycle rule (transition to cheaper
+  storage, or expire after some window) — plain infrastructure config, nothing custom to build.
+  The exact retention period is left open deliberately, same as this project's convention against
+  fixing figures that are really policy calls. Worth keeping raw data around for a while at
+  minimum: it's the entire benefit of Step 8's fetch/process split — delete it immediately and a
+  processing bugfix costs a full re-fetch instead of a free reprocess.
 
 ---
 
@@ -168,6 +232,9 @@ lightweight scheduled check — is left to implementation.
 | Airflow to orchestrate this pipeline | No recurring, multi-system complexity yet that DVC's own dependency tracking doesn't already handle |
 | Kubeflow | No training loop exists yet; this pipeline is deterministic precompute, not model training |
 | Continuous polling for new ISIMIP/GGCMI data | ISIMIP updates on long timescales, not daily; solving for a rate of change this data doesn't have |
+| Download to local disk, then separately push to the DVC remote | Two-hop transfer roughly doubles transfer time and needs local headroom for the full file; streaming direct to S3 with DVC tracking a manifest is a single hop |
+| DVC tracks the raw NetCDF file directly as a stage output | Routes multi-gigabyte payloads through DVC's own cache for no benefit; a small manifest gives the same lineage at a fraction of the cost |
+| Defaulting the process stage's compute runner to CodeBuild because fetch uses it | Fetch and process have different workload shapes (I/O-bound vs. compute-bound); each gets its own evaluation |
 
 ---
 
@@ -190,3 +257,8 @@ lightweight scheduled check — is left to implementation.
 - **Update cadence changes** — if GGCMI or ISIMIP releases start arriving frequently enough that
   manual trigger-tracking (Step 7) becomes a bottleneck, revisit whether a lightweight scheduled
   check is worth adding — still short of the daily-polling architecture this ADR rejects outright.
+- **Raw data storage cost becomes material** — set an actual S3 Lifecycle retention window once
+  real data volumes and access frequency exist to size it against; this ADR only commits to the
+  mechanism, not a number.
+- **The process stage's actual workload characteristics are known** (real CPU/memory/duration
+  once it's built) — resolves its still-open compute-runner choice, independently of fetch's.
