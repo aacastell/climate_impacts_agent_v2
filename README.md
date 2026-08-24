@@ -25,6 +25,12 @@ There are two independent grounding paths, and they are kept separate:
 
 They are reconciled explicitly, never implicitly inside a model.
 
+How this is actually implemented — the agent that resolves a question without touching scientific
+values ([ADR-005](docs/adr/adr-005-agent-orchestration.md)), the pipeline that supplies the facts
+it narrates ([ADR-006](docs/adr/adr-006-offline-scientific-data-pipeline.md)), and how narration
+is checked against a held-out projection before anything is published
+([ADR-007](docs/adr/adr-007-narration-verification-gate.md)).
+
 ---
 
 ## Scope
@@ -45,6 +51,12 @@ They are reconciled explicitly, never implicitly inside a model.
 - A single climate model provides **no climate-model uncertainty range**. Two crop models give
   a range, not a distribution: report the range, never a mean or confidence interval.
 
+**Target scale:** roughly 1,000 users. Roughly 2–10 seconds latency for a normal request; roughly
+30 seconds is acceptable for a cache miss or other exceptional case. This is the number that
+[ADR-006](docs/adr/adr-006-offline-scientific-data-pipeline.md)'s precompute decision is actually
+sized against — the online path only has to do cheap regional aggregation over a precomputed
+grid, never the expensive temporal processing, which is what makes this target plausible at all.
+
 ---
 
 ## Status
@@ -55,10 +67,12 @@ They are reconciled explicitly, never implicitly inside a model.
 | Frontend framework | Decided — [ADR-002](docs/adr/adr-002-frontend-framework.md) |
 | Infrastructure provisioning | Decided — [ADR-003](docs/adr/adr-003-infrastructure-provisioning.md) |
 | Map data delivery | Decided — [ADR-004](docs/adr/adr-004-map-data-delivery.md) |
-| API tier | Open |
-| Precompute vs. on-demand | Decided for map data (precompute — ADR-004); open for narration |
+| Agent orchestration | Decided — [ADR-005](docs/adr/adr-005-agent-orchestration.md) |
+| Offline scientific data pipeline | Decided (architecture) — [ADR-006](docs/adr/adr-006-offline-scientific-data-pipeline.md); storage format and compute runner still open |
+| Verification gate | Decided — [ADR-007](docs/adr/adr-007-narration-verification-gate.md) |
+| API tier | Architecture decided (ADR-005/006/007); backend compute topology (Lambda vs. containers) still open |
+| Precompute vs. on-demand | Decided — precompute globally for scientific calculations (ADR-004, ADR-006); regional aggregation and narration generation itself happen at query time |
 | Indicator set and aggregation rules | Open — pending scientific sign-off |
-| Verification gate | Open |
 
 ---
 
