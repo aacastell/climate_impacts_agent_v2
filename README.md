@@ -79,6 +79,8 @@ grid, never the expensive temporal processing, which is what makes this target p
 | Agent orchestration | Decided — [ADR-005](docs/adr/adr-005-agent-orchestration.md) |
 | Offline scientific data pipeline | Decided — [ADR-006](docs/adr/adr-006-offline-scientific-data-pipeline.md); compute runner still open |
 | Verification gate | Decided — [ADR-007](docs/adr/adr-007-narration-verification-gate.md) |
+| Vector database for RAG | Decided (deferred, with trigger) — [ADR-008](docs/adr/adr-008-vector-database-for-rag.md) |
+| Orchestration framework choice | Decided — [ADR-009](docs/adr/adr-009-orchestration-framework-choice.md): LangGraph for narration()'s retry loop, plain loop for understanding() |
 | API tier | Decided — [ADR-005](docs/adr/adr-005-agent-orchestration.md): Lambda for orchestration, ECS/Fargate for `understanding()`/narration |
 | Precompute vs. on-demand | Decided — precompute globally for scientific calculations (ADR-004, ADR-006); regional aggregation and narration generation itself happen at query time |
 | Indicator set and aggregation rules | Open — pending scientific sign-off |
