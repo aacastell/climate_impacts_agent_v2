@@ -33,7 +33,7 @@ def nearest_point_mean(
     [start_year, end_year], using a real CF time coordinate."""
     point = dataset[variable].sel(lon=lon, lat=lat, method="nearest")
     windowed = point.sel(time=slice(f"{start_year}-01-01", f"{end_year}-12-31"))
-    return float(windowed.mean().item())
+    return float(windowed.mean())
 
 
 def yield_season_start_year(dataset: xr.Dataset, time_dim: str = "time") -> int:
@@ -65,7 +65,7 @@ def nearest_point_yield_mean(
     season_years = season_start + point[time_dim].values
     in_window = (season_years >= start_year) & (season_years <= end_year)
     windowed = point.isel({time_dim: in_window})
-    return float(windowed.mean().item())
+    return float(windowed.mean())
 
 
 def absolute_change(future_mean: float, baseline_mean: float) -> float:
@@ -106,7 +106,11 @@ def global_area_weighted_mean(dataset: xr.Dataset, variable: str, start_year: in
     single scalar, e.g. for the GWL calculation (warming_levels.py)."""
     windowed = dataset[variable].sel(time=slice(f"{start_year}-01-01", f"{end_year}-12-31"))
     weights = area_weights(dataset["lat"])
-    return float(windowed.weighted(weights).mean().item())
+    # float(), not .item(): _open_climate_dataset uses open_mfdataset, so this is dask-backed —
+    # xarray's DataArray.item() doesn't delegate through dask (confirmed via a real CodeBuild
+    # crash: "'item' is not yet a valid method on dask arrays"), but float() does, computing the
+    # array as needed either way.
+    return float(windowed.weighted(weights).mean())
 
 
 def grid_mean(dataset: xr.Dataset, variable: str, start_year: int, end_year: int) -> xr.DataArray:
