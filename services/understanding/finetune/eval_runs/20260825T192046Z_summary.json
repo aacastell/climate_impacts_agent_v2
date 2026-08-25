@@ -1,0 +1,14 @@
+{
+  "model_id": "us.amazon.nova-pro-v1:0",
+  "run_at": "2026-08-25T19:20:46.527894+00:00",
+  "n_questions": 25,
+  "overall_accuracy": 0.92,
+  "resolved_accuracy": 0.8461538461538461,
+  "clarify_accuracy": 1.0,
+  "latency_ms": {
+    "p50": 3171.6970830457285,
+    "p95": 4919.656582991593,
+    "mean": 3242.6699798880145,
+    "max": 5460.845375084318
+  }
+}

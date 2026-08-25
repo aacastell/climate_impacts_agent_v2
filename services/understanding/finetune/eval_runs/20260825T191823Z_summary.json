@@ -1,0 +1,14 @@
+{
+  "model_id": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+  "run_at": "2026-08-25T19:18:23.612126+00:00",
+  "n_questions": 25,
+  "overall_accuracy": 0.0,
+  "resolved_accuracy": 0.0,
+  "clarify_accuracy": 0.0,
+  "latency_ms": {
+    "p50": 203.0700829345733,
+    "p95": 298.4705000417307,
+    "mean": 215.66879169549793,
+    "max": 461.99691703077406
+  }
+}
