@@ -77,7 +77,7 @@ grid, never the expensive temporal processing, which is what makes this target p
 | Infrastructure provisioning | Decided — [ADR-003](docs/adr/adr-003-infrastructure-provisioning.md) |
 | Map data delivery | Decided — [ADR-004](docs/adr/adr-004-map-data-delivery.md) |
 | Agent orchestration | Decided — [ADR-005](docs/adr/adr-005-agent-orchestration.md) |
-| Offline scientific data pipeline | Decided (architecture) — [ADR-006](docs/adr/adr-006-offline-scientific-data-pipeline.md); storage format and compute runner still open |
+| Offline scientific data pipeline | Decided — [ADR-006](docs/adr/adr-006-offline-scientific-data-pipeline.md); compute runner still open |
 | Verification gate | Decided — [ADR-007](docs/adr/adr-007-narration-verification-gate.md) |
 | API tier | Architecture decided (ADR-005/006/007); backend compute topology (Lambda vs. containers) still open |
 | Precompute vs. on-demand | Decided — precompute globally for scientific calculations (ADR-004, ADR-006); regional aggregation and narration generation itself happen at query time |
@@ -107,6 +107,9 @@ when a decision has stopped being valid rather than discovering it the hard way.
 
 The trigger most likely to fire: **if answer URLs must become shareable and indexable**, the
 static-delivery decision reopens.
+
+What's left to build, in dependency order, is tracked in [`docs/roadmap.md`](docs/roadmap.md) —
+separate from this table, which tracks *decided vs. open*, not *build order*.
 
 ---
 
