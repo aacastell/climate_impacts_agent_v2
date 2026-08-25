@@ -1,0 +1,77 @@
+[
+  {
+    "id": "nasa_giss_corn_belt_heat_stress",
+    "title": "NASA GISS: Yang and Wang — Heat stress to jeopardize crop production in the US Corn Belt",
+    "url": "https://www.giss.nasa.gov/pubs/abs/ya08200c.html"
+  },
+  {
+    "id": "nasa_climate_change_crop_growth",
+    "title": "NASA: Climate Change and Its Environmental Impacts on Crop Growth",
+    "url": "https://scitechdaily.com/nasa-research-climate-change-and-its-environmental-impacts-on-crop-growth/"
+  },
+  {
+    "id": "nasa_drought_famine_warnings",
+    "title": "NASA Science: When Drought Threatens Crops — NASA's Role in Famine Warnings",
+    "url": "https://climate.nasa.gov/news/2888/when-drought-threatens-crops-nasas-role-in-famine-warnings"
+  },
+  {
+    "id": "nasa_harvest_geo_cropsim",
+    "title": "NASA Harvest + USDA: Water Use and Crop Yield Simulator (GEO-CropSim)",
+    "url": "https://nasaharvest.umd.edu/news/nasa-harvest-and-usda-release-water-use-and-crop-yield-simulator"
+  },
+  {
+    "id": "nature_food_maize_soybean_heat_thresholds",
+    "title": "Nature Food: Temperature thresholds of extreme heat-induced yield loss in maize and soybean",
+    "url": "https://www.nature.com/articles/s43016-026-01298-0"
+  },
+  {
+    "id": "pnas_temperature_global_crop_yields",
+    "title": "PNAS: Temperature increase reduces global yields of major crops in four independent estimates",
+    "url": "https://www.pnas.org/doi/10.1073/pnas.1701762114"
+  },
+  {
+    "id": "frontiers_maize_grain_filling_heat",
+    "title": "Frontiers: Molecular mechanism of heat stress during grain filling in maize",
+    "url": "https://www.frontiersin.org/journals/plant-science/articles/10.3389/fpls.2024.1533527/full"
+  },
+  {
+    "id": "sciencedirect_cereal_heat_mechanisms",
+    "title": "ScienceDirect: Heat stress in cereals — mechanisms and modelling",
+    "url": "https://www.sciencedirect.com/science/article/abs/pii/S1161030114001221"
+  },
+  {
+    "id": "pmc_heat_stress_tolerance_mechanisms",
+    "title": "PMC: Physiological, Biochemical, and Molecular Mechanisms of Heat Stress Tolerance in Plants",
+    "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC3676804/"
+  },
+  {
+    "id": "springer_heat_stress_review_2025",
+    "title": "Springer: Impression of contemporary heat stress complexities in agricultural crops — a review",
+    "url": "https://link.springer.com/article/10.1007/s10725-025-01382-8"
+  },
+  {
+    "id": "frontiers_drought_staple_crops",
+    "title": "Frontiers: Mechanistic insights into drought stress management in staple crops",
+    "url": "https://www.frontiersin.org/journals/plant-science/articles/10.3389/fpls.2025.1547452/full"
+  },
+  {
+    "id": "nature_rice_flowering_drought",
+    "title": "Nature Scientific Reports: Drought stress at flowering stage — rice physiological traits, yield, quality",
+    "url": "https://www.nature.com/articles/s41598-019-40161-0"
+  },
+  {
+    "id": "pmc_soybean_drought_flowering",
+    "title": "PMC: Resilience of soybean cultivars to drought stress during flowering and early-seed-setting",
+    "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC9870866/"
+  },
+  {
+    "id": "pmc_maize_drought_reproductive_rnaseq",
+    "title": "PMC: Effects of drought on gene expression in maize reproductive tissue (RNA-Seq)",
+    "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC3461560/"
+  },
+  {
+    "id": "frontiers_rice_drought_responses",
+    "title": "Frontiers: Drought stress in rice — morpho-physiological and molecular responses",
+    "url": "https://www.frontiersin.org/journals/plant-science/articles/10.3389/fpls.2023.1215371/full"
+  }
+]
