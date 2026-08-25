@@ -99,6 +99,13 @@ if github_owner and github_repo:
             "rice",
         )
     }
+    # No field above knows or cares about global warming level — GWL is resolved separately, only
+    # at query time (timecode()), from its own dedicated step. See
+    # climate_pipeline/process/gwl_table.py and run.py's module docstring.
+    PROCESS_STEPS["ClimateImpactsProcessGwlYearTable"] = (
+        f"python -m climate_pipeline.process.gwl_table --bucket {bucket_name} "
+        "--manifest-dir manifests --work-dir work"
+    )
 
     for project_name, run_cmd in {**FETCH_STEPS, **PROCESS_STEPS}.items():
         PipelineStepBuildProjectStack(

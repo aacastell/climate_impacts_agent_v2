@@ -1,11 +1,8 @@
-import json
-
 from climate_pipeline.process.run import (
     ALL_FIELDS,
     FIELD_MANIFESTS,
     FIELD_VARIANTS,
     _manifest_checksums,
-    get_or_compute_gwl_year_table,
     output_field_name,
     compute_input_fingerprint,
 )
@@ -64,31 +61,8 @@ def test_field_manifests_climate_naming():
     assert FIELD_MANIFESTS["extreme_heat_days"] == ("tas_baseline", "tas_future")
 
 
-class _FakeS3ExistingGwlTable:
-    """Only supports the "table already exists" path — no tas manifest keys are registered, so
-    this fails loudly if get_or_compute_gwl_year_table tries to compute instead of reuse."""
-
-    def __init__(self, table):
-        self._table = table
-
-    def head_object(self, Bucket, Key):
-        assert Key == "processed/global/gwl_year_table.json"
-        return {"Metadata": {}}
-
-    def get_object(self, Bucket, Key):
-        assert Key == "processed/global/gwl_year_table.json"
-
-        class _Body:
-            def read(_self):
-                return json.dumps(self._table).encode("utf-8")
-
-        return {"Body": _Body()}
-
-
-def test_get_or_compute_gwl_year_table_reuses_an_existing_table_without_recomputing(tmp_path):
-    table = [{"gwl_c": 1.5, "year": 2030}]
-    s3 = _FakeS3ExistingGwlTable(table)
-
-    result = get_or_compute_gwl_year_table(s3, "bucket", tmp_path / "manifests", tmp_path / "work")
-
-    assert result == table
+def test_no_field_manifest_mentions_tas_preindustrial():
+    # Real regression guard: no field's own output should ever depend on GWL/preindustrial data —
+    # that's gwl_table.py's job alone. See run.py's module docstring.
+    for manifests in FIELD_MANIFESTS.values():
+        assert "tas_preindustrial" not in manifests

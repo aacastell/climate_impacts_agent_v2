@@ -14,13 +14,12 @@ committed to git, a fresh CodeBuild checkout has no record of what fetch already
 repro process_global` re-executed the entire upstream fetch graph every single time, regardless of
 which target was asked for.
 
-GWL is the one real, unavoidable cross-field dependency: gwl_c is stored as metadata alongside
-every field's output, but it's derived from tas, not from each field's own variable. Rather than
-hardcode "tas computes it, everyone else waits," every field's invocation calls
-get_or_compute_gwl_year_table(): downloads the table if some other field's build already produced
-it, computes and uploads it otherwise. Whichever field's build happens to run first does the work;
-if two run concurrently before either uploads, both compute it redundantly — a harmless, cheap
-race (a handful of scalar area-weighted means), not an error.
+No field here knows or cares about global warming level. Each field's own output windows are keyed
+purely by year — GWL is resolved separately (see gwl_table.py), only at query time, when
+timecode() maps a requested warming level to a year before this field data ever gets looked up. An
+earlier version attached gwl_c metadata to every field's own output and made every field depend on
+computing it — a real, unforced mistake (pr and maize have no reason to know about tas-derived
+warming levels at all), fixed by pulling that into its own independent step.
 
 Not every field gets one output — some get two. Percent change is only valid for continuous,
 ratio-scale quantities with a true zero where it's the domain-conventional framing (pr, yield);
@@ -51,12 +50,7 @@ from climate_pipeline.process.indices import (
     consecutive_dry_days_per_year,
     extreme_heat_days_per_year,
 )
-from climate_pipeline.process.warming_levels import (
-    VALID_CENTER_YEARS,
-    gwl_for_year,
-    preindustrial_reference,
-    window_for_year,
-)
+from climate_pipeline.process.warming_levels import VALID_CENTER_YEARS, window_for_year
 
 BASELINE_START_YEAR = 1995
 BASELINE_END_YEAR = 2014
@@ -165,46 +159,11 @@ def _assert_grid_shape(dataset: xr.Dataset, variable: str) -> None:
         )
 
 
-def get_or_compute_gwl_year_table(s3, bucket: str, manifest_dir: Path, work_dir: Path) -> list[dict]:
-    """The one real cross-field dependency — see module docstring. Symmetric across all 8 field
-    units: whichever runs first computes and uploads it, the rest just download it."""
-    existing = _head_json(s3, bucket, "processed/global/gwl_year_table.json")
-    if existing is not None:
-        table, _ = existing
-        return table
-
-    tas_preindustrial_manifest = _load_manifest(s3, bucket, manifest_dir, "tas_preindustrial")
-    tas_future_manifest = _load_manifest(s3, bucket, manifest_dir, "tas_future")
-    tas_preindustrial_ds = _open_climate_dataset(s3, bucket, tas_preindustrial_manifest, work_dir)
-    tas_future_ds = _open_climate_dataset(s3, bucket, tas_future_manifest, work_dir)
-
-    preindustrial_ref = preindustrial_reference(tas_preindustrial_ds)
-    gwl_year_table = sorted(
-        (
-            {"gwl_c": round(gwl_for_year(tas_future_ds, year, preindustrial_ref), 3), "year": year}
-            for year in VALID_CENTER_YEARS
-        ),
-        key=lambda entry: entry["gwl_c"],
-    )
-
-    s3.put_object(
-        Bucket=bucket,
-        Key="processed/global/gwl_year_table.json",
-        Body=json.dumps(gwl_year_table, sort_keys=True).encode("utf-8"),
-        ContentType="application/json",
-    )
-    write_manifest(gwl_year_table, manifest_dir / "gwl_year_table.json")
-    return gwl_year_table
-
-
-def _write_field_window(
-    field_da: xr.DataArray, output_field: str, kind: str, year: int, gwl_c: float, out_dir: Path
-) -> Path:
+def _write_field_window(field_da: xr.DataArray, output_field: str, kind: str, year: int, out_dir: Path) -> Path:
     out_dir.mkdir(parents=True, exist_ok=True)
     path = out_dir / f"y{year}.nc"
     ds = field_da.rename(output_field).to_dataset()
     ds.attrs["year"] = year
-    ds.attrs["gwl_c"] = round(gwl_c, 3)
     ds.attrs["change_kind"] = kind
     ds.to_netcdf(path)
     return path
@@ -263,15 +222,11 @@ def process_field(bucket: str, manifest_dir: Path, work_dir: Path, out_dir: Path
         print(f"[{field}] Input fingerprint unchanged ({fingerprint[:12]}...) — skipping.")
         return {**existing_manifest, "skipped": True, "input_fingerprint": fingerprint}
 
-    gwl_year_table = get_or_compute_gwl_year_table(s3, bucket, manifest_dir, work_dir)
-    gwl_by_year = {entry["year"]: entry["gwl_c"] for entry in gwl_year_table}
-
     baseline_grid, future_window = _load_field_data(s3, bucket, field, baseline_manifest, future_manifest, work_dir)
 
     manifest_entries = []
     for year in VALID_CENTER_YEARS:
         start_year, end_year = window_for_year(year)
-        gwl_c = gwl_by_year[year]
         window_grid = future_window(start_year, end_year)
 
         for kind in FIELD_VARIANTS[field]:
@@ -281,12 +236,10 @@ def process_field(bucket: str, manifest_dir: Path, work_dir: Path, out_dir: Path
                 else percent_change_grid(window_grid, baseline_grid)
             )
             output_field = output_field_name(field, kind)
-            path = _write_field_window(change, output_field, kind, year, gwl_c, out_dir / output_field)
+            path = _write_field_window(change, output_field, kind, year, out_dir / output_field)
             key = f"processed/global/{output_field}/y{year}.nc"
             s3.upload_file(str(path), bucket, key)
-            manifest_entries.append(
-                {"field": output_field, "kind": kind, "year": year, "gwl_c": round(gwl_c, 3), "s3_key": key}
-            )
+            manifest_entries.append({"field": output_field, "kind": kind, "year": year, "s3_key": key})
 
     output = {
         "field": field,
