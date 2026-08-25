@@ -22,15 +22,28 @@ project's convention is to let a downstream consumer see both rather than silent
 tas/consecutive_dry_days/extreme_heat_days get one output field each (bare name); pr and the 4
 crops get two each (name_abs, name_pct) — see FIELD_VARIANTS. 3 single + 5 doubled = 13
 field-variants x 67 windows = 871 objects (~871MB), up from the earlier 536.
+
+Also writes gwl_year_table.json — the compact {gwl_c, year} lookup timecode() needs for a direct
+table[gwl] -> year lookup (ADR-005's flagged gap: this used to only exist duplicated across the
+871-entry field manifest, never as its own small artifact).
+
+Whole-run skip-check: before downloading anything, hashes every input manifest's checksums into
+one fingerprint (compute_input_fingerprint) and compares it against the fingerprint recorded on
+the last successful run's processed/global/manifest.json (S3 object metadata, same convention
+stream_to_s3.py already uses for its own per-file skip-check). Unlike fetch's per-file check, this
+stage has no cheap unit smaller than "the whole run" to skip at — any single changed input forces
+a full recompute, so the fingerprint covers all inputs at once rather than per-file.
 """
 
 import argparse
+import hashlib
 import json
 from datetime import UTC, datetime
 from pathlib import Path
 
 import boto3
 import xarray as xr
+from botocore.exceptions import ClientError
 
 from climate_pipeline.fetch.agriculture import CROPS
 from climate_pipeline.fetch.manifest import write_manifest
@@ -83,6 +96,43 @@ EXPECTED_GRID_LON = 720
 
 def _load_manifest(manifest_dir: Path, name: str) -> dict:
     return json.loads((manifest_dir / f"{name}.json").read_text())
+
+
+def _manifest_checksums(manifest: dict) -> list[str]:
+    """All raw-file checksums one fetch manifest covers. Climate manifests (climate.py) nest a
+    list under "files"; agriculture manifests (agriculture.py) are a single stream_file_to_s3()
+    result with the checksum at the top level. Both shapes feed the same fingerprint."""
+    if "files" in manifest:
+        return [f["checksum"] for f in manifest["files"]]
+    return [manifest["checksum"]]
+
+
+def compute_input_fingerprint(manifests: list[dict]) -> str:
+    """One hash standing in for every raw input file this run depends on. Unchanged since the
+    last successful run means the output would be byte-identical, so the whole run — including
+    the ~56GB of downloads that precede any actual compute — can be skipped."""
+    checksums = sorted(c for manifest in manifests for c in _manifest_checksums(manifest))
+    return hashlib.sha256("|".join(checksums).encode("utf-8")).hexdigest()
+
+
+def _existing_manifest_and_fingerprint(s3, bucket: str) -> tuple[dict, str] | None:
+    """The previous successful run's manifest body and the input fingerprint it was recorded
+    under, if a previous run exists at all. Mirrors stream_to_s3.py's own skip-check: tracking
+    state lives in S3 object metadata, checked via head_object, not in DVC's own dvc.lock (which
+    a fresh CodeBuild checkout won't reliably have)."""
+    try:
+        head = s3.head_object(Bucket=bucket, Key="processed/global/manifest.json")
+    except ClientError as exc:
+        if exc.response["Error"]["Code"] in ("404", "NoSuchKey"):
+            return None
+        raise
+
+    fingerprint = head.get("Metadata", {}).get("input-fingerprint")
+    if fingerprint is None:
+        return None
+
+    obj = s3.get_object(Bucket=bucket, Key="processed/global/manifest.json")
+    return json.loads(obj["Body"].read()), fingerprint
 
 
 def _download(s3, bucket: str, s3_key: str, dest_dir: Path) -> Path:
@@ -139,6 +189,26 @@ def process_global(bucket: str, manifest_dir: Path, work_dir: Path, out_dir: Pat
     yield_baseline_manifests = {c: _load_manifest(manifest_dir, f"lpjml_{c}_baseline") for c in CROPS}
     yield_future_manifests = {c: _load_manifest(manifest_dir, f"lpjml_{c}_future") for c in CROPS}
 
+    input_manifests = [
+        tas_preindustrial_manifest,
+        tas_baseline_manifest,
+        pr_baseline_manifest,
+        tas_future_manifest,
+        pr_future_manifest,
+        *yield_baseline_manifests.values(),
+        *yield_future_manifests.values(),
+    ]
+    fingerprint = compute_input_fingerprint(input_manifests)
+
+    existing = _existing_manifest_and_fingerprint(s3, bucket)
+    if existing is not None and existing[1] == fingerprint:
+        existing_manifest, _ = existing
+        print(
+            f"Input fingerprint unchanged ({fingerprint[:12]}...) — all raw inputs match the "
+            "last successful run, skipping download and recompute entirely."
+        )
+        return {**existing_manifest, "skipped": True, "input_fingerprint": fingerprint}
+
     tas_preindustrial_ds = _open_climate_dataset(s3, bucket, tas_preindustrial_manifest, work_dir)
     tas_baseline_ds = _open_climate_dataset(s3, bucket, tas_baseline_manifest, work_dir)
     pr_baseline_ds = _open_climate_dataset(s3, bucket, pr_baseline_manifest, work_dir)
@@ -179,9 +249,11 @@ def process_global(bucket: str, manifest_dir: Path, work_dir: Path, out_dir: Pat
     future_heat_days_years = extreme_heat_days_per_year(tas_future_ds)
 
     manifest_entries = []
+    gwl_year_table = []
     for year in VALID_CENTER_YEARS:
         start_year, end_year = window_for_year(year)
         gwl_c = gwl_for_year(tas_future_ds, year, preindustrial_ref)
+        gwl_year_table.append({"gwl_c": round(gwl_c, 3), "year": year})
 
         window_grids = {
             "tas": grid_mean(tas_future_ds, "tas", start_year, end_year),
@@ -212,6 +284,7 @@ def process_global(bucket: str, manifest_dir: Path, work_dir: Path, out_dir: Pat
 
     return {
         "fields": manifest_entries,
+        "gwl_year_table": sorted(gwl_year_table, key=lambda entry: entry["gwl_c"]),
         "provenance": {
             "climate_model": "GFDL-ESM4",
             "scenario": "SSP3-7.0",
@@ -221,6 +294,8 @@ def process_global(bucket: str, manifest_dir: Path, work_dir: Path, out_dir: Pat
             "preindustrial_reference_tas_k": round(preindustrial_ref, 4),
             "processed_at": datetime.now(UTC).isoformat(),
         },
+        "skipped": False,
+        "input_fingerprint": fingerprint,
     }
 
 
@@ -234,7 +309,16 @@ def main() -> None:
 
     output = process_global(args.bucket, args.manifest_dir, args.work_dir, args.out_dir)
 
+    # Written every run, skipped or not — DVC needs its declared outs to exist, and on a skip
+    # they're identical to the last successful run's (that's the point of the fingerprint match).
     out_path = write_manifest(output, args.manifest_dir / "global_precompute_manifest.json")
+    gwl_table_path = write_manifest(
+        {"gwl_year_table": output["gwl_year_table"]}, args.manifest_dir / "gwl_year_table.json"
+    )
+
+    if output["skipped"]:
+        print(f"Skipped — wrote {out_path} and {gwl_table_path} from the last successful run, nothing new to upload.")
+        return
 
     s3 = boto3.client("s3")
     s3.put_object(
@@ -242,9 +326,25 @@ def main() -> None:
         Key="processed/global/manifest.json",
         Body=json.dumps(output, sort_keys=True).encode("utf-8"),
         ContentType="application/json",
+        # Read back by _existing_manifest_and_fingerprint() on the next run to decide whether to
+        # skip — same "state lives in S3 object metadata" convention stream_to_s3.py already uses.
+        Metadata={"input-fingerprint": output["input_fingerprint"]},
+    )
+    # timecode()'s dedicated artifact (ADR-005's flagged gap): the one compact gwl->year object a
+    # direct lookup needs, not the 871-entry field manifest every consumer would otherwise have to
+    # scan.
+    s3.put_object(
+        Bucket=args.bucket,
+        Key="processed/global/gwl_year_table.json",
+        Body=json.dumps(output["gwl_year_table"], sort_keys=True).encode("utf-8"),
+        ContentType="application/json",
     )
 
-    print(f"Wrote {out_path} and s3://{args.bucket}/processed/global/manifest.json ({len(output['fields'])} fields)")
+    print(
+        f"Wrote {out_path}, {gwl_table_path}, s3://{args.bucket}/processed/global/manifest.json, and "
+        f"s3://{args.bucket}/processed/global/gwl_year_table.json ({len(output['fields'])} fields, "
+        f"{len(output['gwl_year_table'])} gwl_year_table entries)"
+    )
 
 
 if __name__ == "__main__":

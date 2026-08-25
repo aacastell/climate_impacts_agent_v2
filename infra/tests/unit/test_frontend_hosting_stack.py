@@ -51,17 +51,19 @@ def test_distribution_has_two_cloudfront_functions():
     _template().resource_count_is("AWS::CloudFront::Function", 2)
 
 
-def test_distribution_has_a_precomputed_path_behavior():
-    """A second origin/behavior for /precomputed/* — see ADR-004 Step 3's
+def test_distribution_has_a_processed_path_behavior():
+    """A second origin/behavior for /processed/* — see ADR-004 Step 3's
     anticipated pattern, applied here to process-stage output instead of
-    map tiles."""
+    map tiles. Matches the actual S3 key prefix process_global writes to
+    (processed/global/...), not an earlier /precomputed/* that never
+    matched any real key."""
     _template().has_resource_properties(
         "AWS::CloudFront::Distribution",
         {
             "DistributionConfig": Match.object_like(
                 {
                     "CacheBehaviors": Match.array_with(
-                        [Match.object_like({"PathPattern": "/precomputed/*"})]
+                        [Match.object_like({"PathPattern": "/processed/*"})]
                     )
                 }
             )

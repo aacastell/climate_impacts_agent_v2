@@ -105,10 +105,11 @@ class FrontendHostingStack(Stack):
         # Precomputed region data (process stage output, see ADR-006/pipeline/README.md) served
         # as a second origin on this same distribution, path-scoped — exactly the pattern ADR-004
         # Step 3 names for tile data ("a separate bucket... added as a second origin... via a
-        # path pattern e.g. /tiles/*"). Scoped to /precomputed/* only: the isimip data bucket
-        # also holds raw/ and _profiling/ prefixes that must stay unreachable through CloudFront,
-        # and a path pattern with no matching behavior for those prefixes is what keeps them out
-        # — the OAC grant itself is bucket-wide, same as CDK gives the frontend bucket above.
+        # path pattern e.g. /tiles/*"). Scoped to /processed/* only, matching the actual S3 key
+        # prefix process_global writes to (processed/global/...) — the isimip data bucket also
+        # holds raw/ and _profiling/ prefixes that must stay unreachable through CloudFront, and
+        # a path pattern with no matching behavior for those prefixes is what keeps them out —
+        # the OAC grant itself is bucket-wide, same as CDK gives the frontend bucket above.
         #
         # processed_data_bucket lives in a *different* stack (IsimipDataBucketStack) than this
         # distribution. Passing the real construct straight into with_origin_access_control()
@@ -124,7 +125,7 @@ class FrontendHostingStack(Stack):
             self, "ImportedProcessedDataBucket", processed_data_bucket.bucket_name
         )
         distribution.add_behavior(
-            "/precomputed/*",
+            "/processed/*",
             origins.S3BucketOrigin.with_origin_access_control(imported_processed_data_bucket),
             viewer_protocol_policy=cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
             cache_policy=cloudfront.CachePolicy.CACHING_OPTIMIZED,

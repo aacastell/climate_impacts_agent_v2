@@ -153,3 +153,4 @@ stages:
       - climate_pipeline/process/run.py
     outs:
       - manifests/global_precompute_manifest.json
+      - manifests/gwl_year_table.json

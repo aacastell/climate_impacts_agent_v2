@@ -51,7 +51,7 @@ class IsimipDataBucketStack(Stack):
             removal_policy=RemovalPolicy.RETAIN,
         )
 
-        # Read access for CloudFront (see FrontendHostingStack's /precomputed/* behavior,
+        # Read access for CloudFront (see FrontendHostingStack's /processed/* behavior,
         # frontend_hosting_stack.py) — granted here, in this bucket's own stack, rather than via
         # CDK's usual automatic OAC-bucket-policy wiring: that wiring needs to reference the
         # distribution's ARN, but the distribution's own origin needs this bucket's domain name
