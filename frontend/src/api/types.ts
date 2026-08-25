@@ -1,6 +1,8 @@
-// API contract for the query endpoint. The API tier itself is not yet decided
-// (see repo README "Status" table) — this is the shape the frontend needs,
-// not a shape any backend has committed to.
+// API contract for the query endpoint. Matches the real backend now that one exists
+// (api/interpret_handler.py, api/narrate_handler.py) — interpret() and narrate() are two
+// separate calls (ADR-004 Step 4: narrate() is a pure function of the interpretation, never
+// receives anything interpret() computed), and clarify() is a real, resumable round-trip
+// (ADR-005's query_id/session-store design), not just a dead-end message.
 
 export type Crop = "maize" | "spring_wheat" | "soy" | "rice";
 
@@ -8,10 +10,21 @@ export interface QueryRequest {
   question: string;
 }
 
+// A follow-up answering a clarify() prompt — carries the session's query_id back so the backend
+// can resume the stored conversation instead of starting a fresh one. See
+// api/interpret_handler.py's session store.
+export interface ClarifyResumeRequest {
+  queryId: string;
+  answer: string;
+}
+
 export interface QueryInterpretation {
   region: string;
+  regionLon: number;
+  regionLat: number;
   crop: Crop;
   warmingLevelC: number;
+  year: number;
 }
 
 export interface MapCenter {
@@ -80,16 +93,38 @@ export interface Provenance {
   promptVersion: string;
 }
 
+// Narration is fetched separately from the answer (ApiClient.fetchNarration), never bundled
+// into QueryAnswer — it's a genuinely slower, independent call in the real backend (RAG +
+// generation + verification, with up to 2 retries), and the UI shows the maps immediately while
+// narration is still loading rather than blocking on the slowest part of the response.
+export type NarrationStatus = "PASS" | "SCIENTIFIC_DISAGREEMENT";
+
+export interface NarrationResult {
+  narration: string;
+  status: NarrationStatus;
+  attempts: number;
+}
+
 export interface QueryAnswer {
   kind: "answer";
   interpretation: QueryInterpretation;
   climateMap: ClimateMapPayload;
   sectorMap: SectorMapPayload;
-  narration: string;
   // Always includes the two mandatory facts from the README: no adaptation
   // represented (2015soc), and no climate-model uncertainty range.
   disclaimers: string[];
   provenance: Provenance;
+}
+
+// The model asked for clarification instead of guessing (see
+// services/understanding/orchestrator.py's SYSTEM_PROMPT) — queryId must be sent back with the
+// user's answer via ApiClient.submitClarifyAnswer to resume the same conversation; it is not a
+// new question and re-sending the original text alone would lose everything the model already
+// resolved.
+export interface QueryClarify {
+  kind: "clarify";
+  queryId: string;
+  question: string;
 }
 
 // Refusals are typed and deterministic, never a model judgement call — see
@@ -99,7 +134,9 @@ export type RefusalReason =
   | "unsupported_region"
   | "unsupported_warming_level"
   | "ambiguous_question"
-  | "unparseable_question";
+  | "unparseable_question"
+  | "no_resolution"
+  | "session_expired";
 
 export interface QueryRefusal {
   kind: "refusal";
@@ -107,8 +144,12 @@ export interface QueryRefusal {
   message: string;
 }
 
-export type QueryResponse = QueryAnswer | QueryRefusal;
+export type QueryResponse = QueryAnswer | QueryClarify | QueryRefusal;
 
 export interface ApiClient {
   submitQuery(request: QueryRequest): Promise<QueryResponse>;
+  // Resumes a clarify() round-trip. Clients that never emit QueryClarify (MockApiClient,
+  // PrecomputedApiClient) are not required to make this reachable — see their implementations.
+  submitClarifyAnswer(resume: ClarifyResumeRequest): Promise<QueryResponse>;
+  fetchNarration(interpretation: QueryInterpretation): Promise<NarrationResult>;
 }

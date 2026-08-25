@@ -3,7 +3,9 @@ import type {
   ClimateIndicatorPayload,
   Crop,
   MapCenter,
+  NarrationResult,
   QueryAnswer,
+  QueryInterpretation,
   QueryRequest,
   QueryResponse,
 } from "./types";
@@ -112,26 +114,61 @@ export class MockApiClient implements ApiClient {
     return this.buildAnswer(crop, region, warmingLevelC);
   }
 
+  // Never actually reachable — MockApiClient only ever returns "answer" or "refusal" from
+  // submitQuery, never "clarify" — but the ApiClient interface requires every implementation to
+  // support resuming one, since the real HttpApiClient does. Failing loudly here is correct if
+  // this ever somehow gets called; a silent fallback would hide a real bug in the caller.
+  async submitClarifyAnswer(): Promise<QueryResponse> {
+    throw new Error("MockApiClient never emits clarify() — submitClarifyAnswer is unreachable.");
+  }
+
+  async fetchNarration(interpretation: QueryInterpretation): Promise<NarrationResult> {
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    const { tempChange, yieldChange, cropLabel } = this.deterministicValues(
+      interpretation.crop,
+      interpretation.region,
+      interpretation.warmingLevelC,
+    );
+    return {
+      narration:
+        `At ${interpretation.warmingLevelC}°C of global warming, ${interpretation.region} is projected to warm by about ` +
+        `${tempChange}°C locally under SSP3-7.0, based on the GFDL-ESM4 climate model. ` +
+        `Non-irrigated ${cropLabel} yields in the region are projected to change by ` +
+        `${yieldChange}% relative to baseline, based on the LPJmL crop model.`,
+      status: "PASS",
+      attempts: 1,
+    };
+  }
+
+  // Shared by buildAnswer and fetchNarration so both derive the same tempChange/yieldChange from
+  // the same seed — narration always agrees with the maps it's describing, without the two
+  // being computed together in one call (mirrors the real backend's two-independent-calls shape).
+  private deterministicValues(crop: Crop, regionName: string, warmingLevelC: number) {
+    const rand = seededRandom(hashSeed(`${regionName}|${crop}|${warmingLevelC}`));
+    const indicators = buildClimateIndicators(warmingLevelC, rand);
+    const tempChange = indicators[0].value;
+    const yieldChange = Number((-(warmingLevelC * (3 + rand() * 4))).toFixed(1));
+    return { indicators, tempChange, yieldChange, cropLabel: CROP_LABELS[crop] };
+  }
+
   private buildAnswer(
     crop: Crop,
     region: { name: string; center: MapCenter },
     warmingLevelC: number,
   ): QueryAnswer {
-    const rand = seededRandom(hashSeed(`${region.name}|${crop}|${warmingLevelC}`));
-
-    const indicators = buildClimateIndicators(warmingLevelC, rand);
-    const tempChange = indicators[0].value;
-
-    const yieldChange = Number((-(warmingLevelC * (3 + rand() * 4))).toFixed(1));
-
-    const cropLabel = CROP_LABELS[crop];
+    const { indicators, yieldChange, cropLabel } = this.deterministicValues(crop, region.name, warmingLevelC);
 
     return {
       kind: "answer",
       interpretation: {
         region: region.name,
+        regionLon: region.center.lon,
+        regionLat: region.center.lat,
         crop,
         warmingLevelC,
+        // No real year concept in this synthetic client — a plausible-looking value in the
+        // real system's actual range (2025-2091, see warming_levels.py), not derived from data.
+        year: Math.round(2025 + warmingLevelC * 20),
       },
       climateMap: {
         center: region.center,
@@ -145,11 +182,6 @@ export class MockApiClient implements ApiClient {
         center: region.center,
         zoom: 5,
       },
-      narration:
-        `At ${warmingLevelC}°C of global warming, ${region.name} is projected to warm by about ` +
-        `${tempChange}°C locally under SSP3-7.0, based on the GFDL-ESM4 climate model. ` +
-        `Non-irrigated ${cropLabel} yields in the region are projected to change by ` +
-        `${yieldChange}% relative to baseline, based on the LPJmL crop model.`,
       disclaimers: [
         "Management is frozen at 2015 conditions (2015soc) — no adaptation is represented.",
         "A single climate model provides no climate-model uncertainty range. The yield figure " +

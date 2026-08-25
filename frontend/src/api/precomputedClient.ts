@@ -2,12 +2,14 @@ import type {
   ApiClient,
   ClimateIndicatorPayload,
   Crop,
+  NarrationResult,
   QueryAnswer,
+  QueryInterpretation,
   QueryRequest,
   QueryResponse,
 } from "./types";
 import { hashSeed, seededRandom } from "./deterministicRandom";
-import { CROP_LABELS, findCrop, findRegion, findWarmingLevel } from "./questionParsing";
+import { CROP_LABELS, findCrop, findRegion, findWarmingLevel, REGION_SLUGS } from "./questionParsing";
 
 // Real precomputed values from the process stage (see
 // pipeline/climate_pipeline/process/run.py), served as a static file through
@@ -141,6 +143,38 @@ export class PrecomputedApiClient implements ApiClient {
     return this.buildAnswer(crop, region, matchedWindow, processed.provenance);
   }
 
+  // Never actually reachable — see MockApiClient's identical method for why this still has to
+  // exist and fail loudly rather than silently.
+  async submitClarifyAnswer(): Promise<QueryResponse> {
+    throw new Error("PrecomputedApiClient never emits clarify() — submitClarifyAnswer is unreachable.");
+  }
+
+  async fetchNarration(interpretation: QueryInterpretation): Promise<NarrationResult> {
+    const slug = REGION_SLUGS[interpretation.region.toLowerCase()];
+    const processed = await loadProcessedRegions();
+    const processedRegion = slug ? processed.regions[slug] : undefined;
+    const matchedWindow = processedRegion?.windows.find((w) => w.gwl_c === interpretation.warmingLevelC);
+    const cropLabel = CROP_LABELS[interpretation.crop];
+
+    if (!matchedWindow) {
+      // Shouldn't happen — submitQuery already validated this exact window exists before
+      // returning an answer — but fail with a real message rather than a silent wrong value.
+      throw new Error(`No precomputed window for ${interpretation.region} at ${interpretation.warmingLevelC}°C.`);
+    }
+
+    const yieldChange = matchedWindow[YIELD_FIELD[interpretation.crop]];
+    return {
+      narration:
+        `At ${matchedWindow.gwl_c}°C of global warming (around ${matchedWindow.center_year}), ${interpretation.region} ` +
+        `is projected to warm by about ${matchedWindow.tas_change}°C locally under ${processed.provenance.scenario}, ` +
+        `based on the ${processed.provenance.climate_model} climate model. Non-irrigated ${cropLabel} yields ` +
+        `in the region are projected to change by ${yieldChange}% relative to baseline, based on ` +
+        `the ${processed.provenance.crop_model} crop model.`,
+      status: "PASS",
+      attempts: 1,
+    };
+  }
+
   private buildAnswer(
     crop: Crop,
     region: { name: string; slug: string; center: { lon: number; lat: number } },
@@ -194,8 +228,11 @@ export class PrecomputedApiClient implements ApiClient {
       kind: "answer",
       interpretation: {
         region: region.name,
+        regionLon: region.center.lon,
+        regionLat: region.center.lat,
         crop,
         warmingLevelC: matchedWindow.gwl_c,
+        year: matchedWindow.center_year,
       },
       climateMap: {
         center: region.center,
@@ -209,12 +246,6 @@ export class PrecomputedApiClient implements ApiClient {
         center: region.center,
         zoom: 5,
       },
-      narration:
-        `At ${matchedWindow.gwl_c}°C of global warming (around ${matchedWindow.center_year}), ${region.name} ` +
-        `is projected to warm by about ${matchedWindow.tas_change}°C locally under ${provenance.scenario}, ` +
-        `based on the ${provenance.climate_model} climate model. Non-irrigated ${cropLabel} yields ` +
-        `in the region are projected to change by ${yieldChange}% relative to baseline, based on ` +
-        `the ${provenance.crop_model} crop model.`,
       disclaimers: [
         "Management is frozen at 2015 conditions (2015soc) — no adaptation is represented.",
         "A single climate model provides no climate-model uncertainty range. The yield figure " +

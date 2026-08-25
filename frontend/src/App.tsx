@@ -1,10 +1,11 @@
 import { useState } from "react";
 import { apiClient } from "./api";
-import type { ClimateIndicatorId, ClimateIndicatorPayload, QueryResponse } from "./api/types";
+import type { ClimateIndicatorId, ClimateIndicatorPayload, NarrationResult, QueryAnswer, QueryClarify, QueryResponse } from "./api/types";
 import { QueryForm } from "./components/QueryForm";
 import { ResultMap } from "./components/ResultMap";
 import { IndicatorToggle } from "./components/IndicatorToggle";
 import { NarrationPanel } from "./components/NarrationPanel";
+import { ClarifyPrompt } from "./components/ClarifyPrompt";
 import { RefusalNotice } from "./components/RefusalNotice";
 import { ProvenanceFooter } from "./components/ProvenanceFooter";
 import "./App.css";
@@ -44,16 +45,60 @@ function App() {
   const [error, setError] = useState<string | null>(null);
   const [selectedIndicatorId, setSelectedIndicatorId] = useState<ClimateIndicatorId>("temp_change");
 
+  // Narration is a separate, slower call (RAG + generation + verification, real retries in the
+  // real backend) — fetched after the maps are already showing, not blocking them.
+  const [narration, setNarration] = useState<NarrationResult | null>(null);
+  const [isNarrationLoading, setIsNarrationLoading] = useState(false);
+  const [narrationError, setNarrationError] = useState<string | null>(null);
+
+  const [isClarifying, setIsClarifying] = useState(false);
+
+  async function loadNarration(answer: QueryAnswer) {
+    setNarration(null);
+    setNarrationError(null);
+    setIsNarrationLoading(true);
+    try {
+      const result = await apiClient.fetchNarration(answer.interpretation);
+      setNarration(result);
+    } catch {
+      setNarrationError("Couldn't generate an explanation for this result. The numbers above are still real.");
+    } finally {
+      setIsNarrationLoading(false);
+    }
+  }
+
+  function handleResponse(result: QueryResponse) {
+    setResponse(result);
+    if (result.kind === "answer") {
+      void loadNarration(result);
+    }
+  }
+
   async function handleSubmit(question: string) {
     setIsLoading(true);
     setError(null);
+    setNarration(null);
+    setNarrationError(null);
     try {
       const result = await apiClient.submitQuery({ question });
-      setResponse(result);
+      handleResponse(result);
     } catch {
       setError("Something went wrong reaching the server. Try again.");
     } finally {
       setIsLoading(false);
+    }
+  }
+
+  async function handleClarifyAnswer(clarify: QueryClarify, answerText: string) {
+    setIsClarifying(true);
+    setError(null);
+    try {
+      const result = await apiClient.submitClarifyAnswer({ queryId: clarify.queryId, answer: answerText });
+      handleResponse(result);
+    } catch {
+      setError("Something went wrong reaching the server. Try again.");
+    } finally {
+      setIsClarifying(false);
     }
   }
 
@@ -78,6 +123,14 @@ function App() {
       {error && <div className="app-error">{error}</div>}
 
       {response?.kind === "refusal" && <RefusalNotice refusal={response} />}
+
+      {response?.kind === "clarify" && (
+        <ClarifyPrompt
+          clarify={response}
+          isLoading={isClarifying}
+          onAnswer={(answerText) => handleClarifyAnswer(response, answerText)}
+        />
+      )}
 
       {answer && selectedIndicator && (
         <div className="app-results">
@@ -111,7 +164,12 @@ function App() {
             />
           </div>
 
-          <NarrationPanel answer={answer} />
+          <NarrationPanel
+            narration={narration}
+            isLoading={isNarrationLoading}
+            error={narrationError}
+            disclaimers={answer.disclaimers}
+          />
           <ProvenanceFooter provenance={answer.provenance} />
         </div>
       )}

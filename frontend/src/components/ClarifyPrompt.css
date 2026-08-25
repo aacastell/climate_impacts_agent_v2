@@ -1,0 +1,52 @@
+.clarify-prompt {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  background: var(--panel-bg);
+  padding: 1rem 1.15rem;
+}
+
+.clarify-prompt-question {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 600;
+}
+
+.clarify-prompt-row {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.clarify-prompt-row input {
+  flex: 1;
+  min-width: 0;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 1rem;
+  background: var(--panel-bg);
+  color: var(--text);
+}
+
+.clarify-prompt-row input:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.clarify-prompt-row button {
+  padding: 0.6rem 1.25rem;
+  border: none;
+  border-radius: 6px;
+  background: var(--accent);
+  color: white;
+  font-weight: 600;
+  font-size: 1rem;
+  cursor: pointer;
+}
+
+.clarify-prompt-row button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
