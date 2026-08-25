@@ -147,6 +147,17 @@ def _open_climate_dataset(s3, bucket: str, manifest: dict, work_dir: Path) -> xr
     return xr.open_mfdataset([str(p) for p in paths], combine="by_coords")
 
 
+def _open_yield_dataset(s3, bucket: str, manifest: dict, work_dir: Path) -> xr.Dataset:
+    """LPJmL's time coordinate is a season-index, not real calendar time (units like "growing
+    seasons since 1601-01-01", calendar "360_day") — a real, now-confirmed case of the risk
+    extract.py's module docstring flagged as unverified. xarray's default decode_times=True tries
+    to CF-decode it anyway and fails before yield_season_start_year/yield_grid_mean ever run,
+    since "growing seasons" isn't a real time unit cftime recognizes. decode_times=False leaves
+    the raw numeric season index alone, which is exactly what those functions already expect."""
+    path = _download(s3, bucket, manifest["s3_key"], work_dir)
+    return xr.open_dataset(path, decode_times=False)
+
+
 def _assert_grid_shape(dataset: xr.Dataset, variable: str) -> None:
     """LPJmL yield data is assumed to share the climate driver grid (720x360, 0.5deg) — ISIMIP's
     protocol mandates a common grid across sectors, and this session verified the variable-name
@@ -214,12 +225,8 @@ def process_global(bucket: str, manifest_dir: Path, work_dir: Path, out_dir: Pat
     pr_baseline_ds = _open_climate_dataset(s3, bucket, pr_baseline_manifest, work_dir)
     tas_future_ds = _open_climate_dataset(s3, bucket, tas_future_manifest, work_dir)
     pr_future_ds = _open_climate_dataset(s3, bucket, pr_future_manifest, work_dir)
-    yield_baseline_ds = {
-        c: xr.open_dataset(_download(s3, bucket, yield_baseline_manifests[c]["s3_key"], work_dir)) for c in CROPS
-    }
-    yield_future_ds = {
-        c: xr.open_dataset(_download(s3, bucket, yield_future_manifests[c]["s3_key"], work_dir)) for c in CROPS
-    }
+    yield_baseline_ds = {c: _open_yield_dataset(s3, bucket, yield_baseline_manifests[c], work_dir) for c in CROPS}
+    yield_future_ds = {c: _open_yield_dataset(s3, bucket, yield_future_manifests[c], work_dir) for c in CROPS}
 
     for c in CROPS:
         _assert_grid_shape(yield_baseline_ds[c], f"yield-{CROPS[c]}-noirr")

@@ -10,10 +10,12 @@ Climate driver files (tas, pr) use standard CF time/lat/lon dimensions. LPJmL yi
 do not: per the ISIMIP/GGCMI protocol, crop yield is reported per growing season, not per
 calendar date, so these files use a unitless integer season-index coordinate instead of a real
 time axis. This module derives the real calendar year for each season index from that
-coordinate's own `units` attribute (e.g. "growing seasons since 1850-01-01") rather than
-hardcoding a start year, and fails loudly if that attribute doesn't match the documented
-convention — this hasn't yet been verified against a real downloaded file, so treat
-yield_season_start_year's behavior as unconfirmed until checked against one.
+coordinate's own `units` attribute rather than hardcoding a start year, and fails loudly if that
+attribute doesn't match the documented convention. Confirmed against a real downloaded file: LPJmL
+noirr output uses `units="growing seasons since 1601-01-01 00:00:00"` and `calendar="360_day"` —
+not a real CF time axis at all, which is why the caller must open these files with
+`decode_times=False` (see run.py's `_open_yield_dataset`) rather than letting xarray try and fail
+to CF-decode "growing seasons" as a time unit.
 """
 
 import re
