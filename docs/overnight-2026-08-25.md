@@ -56,21 +56,42 @@ container image, API Gateway). 10/10 new tests pass. Wired into `infra/app.py` (
   initialize — confirmed live against the currently-installed version, not assumed from older
   docs. `eval_capture.py`'s docstring and the test both use a real sqlite backend instead.
 
-## Real, external blockers — not code problems, need your action
+## Correction: the "Bedrock is unprovisioned" blocker was my own mistake, not a real one
 
-1. **Bedrock is effectively unprovisioned on this account.** Checked via `aws service-quotas
-   list-service-quotas --service-code bedrock`: every model's quota — tokens/day, tokens/minute,
-   requests/minute — reads `0.0`, across Anthropic, Amazon, and Mistral models alike. This is why
-   live end-to-end testing of `understanding()`/`narration()` wasn't possible tonight, despite
-   trying four different models across three providers (all failed with either a missing
-   use-case-form error, a "too many tokens per day" throttle, or an inference-profile validation
-   error). **This needs a real AWS Support / Service Quotas request to raise Bedrock limits** —
-   not an API key (Bedrock's optional bearer-token auth wasn't the issue; standard IAM/SSO
-   credentials were authenticating fine all night, confirmed because every error was
-   model-specific, not an auth error).
-2. Anthropic models specifically also need their use-case form submitted in the Bedrock console
-   (separate from the quota issue above).
-3. Old shared CodeBuild project (`ClimateImpactsIsimipFetch`, from earlier tonight's unrelated
+Earlier tonight this doc said Bedrock quotas were `0.0` account-wide and called it an external
+blocker needing an AWS Support request. That was wrong, and it was my error, not an account
+problem: I checked and called Bedrock in `us-east-1`, but this project's real home region — where
+CodeBuild, the CDK app, and the "dev" SSO profile all actually live — is `us-east-2` (Ohio).
+Service quotas are per-region. Checked again in the correct region: real, substantial quotas exist
+(27M tokens/day for Claude Haiku 4.5, 200 req/min for Nova Lite, and more — the account has real
+capacity that was never actually missing).
+
+**Once pointed at the right region, `understanding()` and `narration()` both ran live, end to
+end, for real, successfully:**
+
+- `understanding()`, real question `"What happens to rice around the Mekong Delta at 3C?"`,
+  real Bedrock (Nova Pro) + real Amazon Location Service: correctly resolved to
+  `{region: "Mekong Delta, VNM" (105.83, 10.01), crop: "rice", warmingLevelC: 3, year: 2065}`. The
+  model correctly judged the ambiguous geocode candidates — picked the real Vietnamese delta over
+  an unrelated German restaurant and a coincidentally-named Indonesian sub-district, the exact
+  ambiguity-resolution case ADR-005 Step 4 was designed for. `timecode()` correctly resolved
+  3.0°C to year 2065 against the test table.
+- `narration()`, same resolved query: generated narration blind to the actual yield number, then
+  the verification step (given the real held-out -18.5% projection) correctly judged it
+  `PASS`/`direction_match: true` — a genuine, real structured consistency check, not a stub.
+
+One real bug found and fixed by this live test, not caught by any unit test: Bedrock Converse
+requires `toolResult.content[].json` to be a JSON *object*, not a bare array/string/int.
+`geocode()` returns a list, `crop()` a string-or-None, `timecode()` an int — `orchestrator.py`'s
+`_run_tool` now wraps each under a named key (`{"candidates": ...}`, `{"crop": ...}`,
+`{"year": ...}`) before sending it back to the model. Fixed, unit test updated to match, 4/4 still
+pass.
+
+**Remaining, real, smaller items:**
+1. Anthropic models specifically still need their use-case form submitted in the Bedrock console
+   before they can be called (unrelated to the quota mistake above — tried and confirmed blocked
+   on Claude Haiku 4.5 specifically; Nova Pro, used for the live tests above, needed no such form).
+2. Old shared CodeBuild project (`ClimateImpactsIsimipFetch`, from earlier tonight's unrelated
    pipeline decoupling work) still needs manual `aws codebuild delete-project` cleanup.
 
 ## Real benchmark findings
