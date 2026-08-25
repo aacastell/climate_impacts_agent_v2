@@ -1,38 +1,32 @@
-"""Process stage entry point — turns fetched raw NetCDF into the real global precomputed grid.
+"""Process stage — one independent unit per field, not one monolithic run.
 
-Supersedes the earlier 5-fixed-point MVP. Regional extraction is explicitly out of scope here —
-it stays a query-time concern (ADR-006 Step 3, the region vocabulary is unbounded) for whenever
-the real API layer gets built. This stage's only job is to produce the global, per-(field,
-window) change-from-baseline grids everything downstream will eventually read from.
+Each field (tas, pr, consecutive_dry_days, extreme_heat_days, maize, spring_wheat, soy, rice) is
+processed by its own invocation of this module (--field), needing only that field's own two fetch
+manifests as real input, downloaded directly from a fixed S3 key (see
+fetch/manifest.py's upload_manifest) — no `dvc repro`, no dependency-graph traversal, no
+possibility of one field's build touching another's work.
 
-Reads the local manifest files the fetch stages already wrote (dvc.yaml wires those as this
-stage's deps). Downloads only the raw NetCDF each manifest points at — one hop, S3 to this
-stage's own ephemeral compute (ADR-006 Step 8) — computes 67 years' worth of 20-year-window
-change grids and writes each as its own small NetCDF object under
-processed/global/{field}/y{year}.nc, plus a manifest listing all of them with their
-{field, year, gwl_c} so a future consumer can find the right key without listing the S3 prefix.
+This replaces an earlier monolithic process_global() that computed all 8 fields' 67-year windows
+in one process. Real profiling data (a CodeBuild TIMED_OUT after ~41 minutes of silent execution,
+having already burned through the account's ~45-minute cap) showed that didn't fit, and routing
+every stage through `dvc repro <target>` caused real, unwanted coupling: since dvc.lock is never
+committed to git, a fresh CodeBuild checkout has no record of what fetch already did, so `dvc
+repro process_global` re-executed the entire upstream fetch graph every single time, regardless of
+which target was asked for.
+
+GWL is the one real, unavoidable cross-field dependency: gwl_c is stored as metadata alongside
+every field's output, but it's derived from tas, not from each field's own variable. Rather than
+hardcode "tas computes it, everyone else waits," every field's invocation calls
+get_or_compute_gwl_year_table(): downloads the table if some other field's build already produced
+it, computes and uploads it otherwise. Whichever field's build happens to run first does the work;
+if two run concurrently before either uploads, both compute it redundantly — a harmless, cheap
+race (a handful of scalar area-weighted means), not an error.
 
 Not every field gets one output — some get two. Percent change is only valid for continuous,
 ratio-scale quantities with a true zero where it's the domain-conventional framing (pr, yield);
-it's invalid for temperature (no true zero) and misleading for day-counts (near-zero baselines
-are common and produce meaningless swings). Where percent is valid, both absolute and percent are
-computed and stored — not one chosen on the data's behalf — because a small-baseline cell (arid
-precip, marginal cropland) can make percent change technically correct but misleading, and this
-project's convention is to let a downstream consumer see both rather than silently pick.
-tas/consecutive_dry_days/extreme_heat_days get one output field each (bare name); pr and the 4
-crops get two each (name_abs, name_pct) — see FIELD_VARIANTS. 3 single + 5 doubled = 13
-field-variants x 67 windows = 871 objects (~871MB), up from the earlier 536.
-
-Also writes gwl_year_table.json — the compact {gwl_c, year} lookup timecode() needs for a direct
-table[gwl] -> year lookup (ADR-005's flagged gap: this used to only exist duplicated across the
-871-entry field manifest, never as its own small artifact).
-
-Whole-run skip-check: before downloading anything, hashes every input manifest's checksums into
-one fingerprint (compute_input_fingerprint) and compares it against the fingerprint recorded on
-the last successful run's processed/global/manifest.json (S3 object metadata, same convention
-stream_to_s3.py already uses for its own per-file skip-check). Unlike fetch's per-file check, this
-stage has no cheap unit smaller than "the whole run" to skip at — any single changed input forces
-a full recompute, so the fingerprint covers all inputs at once rather than per-file.
+it's invalid for temperature (no true zero) and misleading for day-counts (near-zero baselines are
+common and produce meaningless swings). Where percent is valid, both absolute and percent are
+computed and stored — see FIELD_VARIANTS.
 """
 
 import argparse
@@ -71,9 +65,7 @@ CLIMATE_FIELDS = ["tas", "pr", "consecutive_dry_days", "extreme_heat_days"]
 CROP_FIELDS = list(CROPS)
 ALL_FIELDS = CLIMATE_FIELDS + CROP_FIELDS
 
-# Which change-kind(s) each field gets — see module docstring for the reasoning. tas and the two
-# day-count indices are absolute-only (percent is invalid or misleading for them, not just less
-# useful — adding it would be actively wrong, not a missing nice-to-have). pr and yield get both.
+# Which change-kind(s) each field gets — see module docstring for the reasoning.
 FIELD_VARIANTS = {
     "tas": ["absolute"],
     "pr": ["absolute", "percent"],
@@ -81,6 +73,20 @@ FIELD_VARIANTS = {
     "extreme_heat_days": ["absolute"],
     **{crop: ["absolute", "percent"] for crop in CROP_FIELDS},
 }
+
+# The exact two fetch manifests each field needs — its own real data dependency, nothing more.
+# consecutive_dry_days/extreme_heat_days are derived indices but still only ever touch pr/tas
+# respectively, same as the base climate fields they're derived from.
+FIELD_MANIFESTS = {
+    "tas": ("tas_baseline", "tas_future"),
+    "pr": ("pr_baseline", "pr_future"),
+    "consecutive_dry_days": ("pr_baseline", "pr_future"),
+    "extreme_heat_days": ("tas_baseline", "tas_future"),
+    **{crop: (f"lpjml_{crop}_baseline", f"lpjml_{crop}_future") for crop in CROP_FIELDS},
+}
+
+EXPECTED_GRID_LAT = 360
+EXPECTED_GRID_LON = 720
 
 
 def output_field_name(base_field: str, kind: str) -> str:
@@ -90,79 +96,66 @@ def output_field_name(base_field: str, kind: str) -> str:
     return f"{base_field}_{'abs' if kind == 'absolute' else 'pct'}"
 
 
-EXPECTED_GRID_LAT = 360
-EXPECTED_GRID_LON = 720
+def _download(s3, bucket: str, key: str, dest: Path) -> Path:
+    if not dest.exists():
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        s3.download_file(bucket, key, str(dest))
+    return dest
 
 
-def _load_manifest(manifest_dir: Path, name: str) -> dict:
-    return json.loads((manifest_dir / f"{name}.json").read_text())
+def _load_manifest(s3, bucket: str, manifest_dir: Path, name: str) -> dict:
+    """Downloads a fetch manifest directly from its fixed S3 key — no dvc repro involved. Fails
+    loudly (real S3 error) if the fetch stage this field depends on hasn't actually run yet."""
+    dest = manifest_dir / f"{name}.json"
+    _download(s3, bucket, f"manifests/{name}.json", dest)
+    return json.loads(dest.read_text())
 
 
 def _manifest_checksums(manifest: dict) -> list[str]:
-    """All raw-file checksums one fetch manifest covers. Climate manifests (climate.py) nest a
-    list under "files"; agriculture manifests (agriculture.py) are a single stream_file_to_s3()
-    result with the checksum at the top level. Both shapes feed the same fingerprint."""
+    """All raw-file checksums one fetch manifest covers. Climate manifests nest a list under
+    "files"; agriculture manifests are a single stream_file_to_s3() result with the checksum at
+    the top level."""
     if "files" in manifest:
         return [f["checksum"] for f in manifest["files"]]
     return [manifest["checksum"]]
 
 
 def compute_input_fingerprint(manifests: list[dict]) -> str:
-    """One hash standing in for every raw input file this run depends on. Unchanged since the
-    last successful run means the output would be byte-identical, so the whole run — including
-    the ~56GB of downloads that precede any actual compute — can be skipped."""
+    """One hash standing in for every raw input file this field's run depends on. Unchanged since
+    the last successful run means the output would be byte-identical, so this field's whole run
+    can be skipped."""
     checksums = sorted(c for manifest in manifests for c in _manifest_checksums(manifest))
     return hashlib.sha256("|".join(checksums).encode("utf-8")).hexdigest()
 
 
-def _existing_manifest_and_fingerprint(s3, bucket: str) -> tuple[dict, str] | None:
-    """The previous successful run's manifest body and the input fingerprint it was recorded
-    under, if a previous run exists at all. Mirrors stream_to_s3.py's own skip-check: tracking
-    state lives in S3 object metadata, checked via head_object, not in DVC's own dvc.lock (which
-    a fresh CodeBuild checkout won't reliably have)."""
+def _head_json(s3, bucket: str, key: str) -> tuple[dict, str] | None:
+    """The object's body plus its recorded input-fingerprint metadata, or None if it doesn't
+    exist yet."""
     try:
-        head = s3.head_object(Bucket=bucket, Key="processed/global/manifest.json")
+        head = s3.head_object(Bucket=bucket, Key=key)
     except ClientError as exc:
         if exc.response["Error"]["Code"] in ("404", "NoSuchKey"):
             return None
         raise
-
     fingerprint = head.get("Metadata", {}).get("input-fingerprint")
-    if fingerprint is None:
-        return None
-
-    obj = s3.get_object(Bucket=bucket, Key="processed/global/manifest.json")
+    obj = s3.get_object(Bucket=bucket, Key=key)
     return json.loads(obj["Body"].read()), fingerprint
 
 
-def _download(s3, bucket: str, s3_key: str, dest_dir: Path) -> Path:
-    dest = dest_dir / Path(s3_key).name
-    if not dest.exists():
-        s3.download_file(bucket, s3_key, str(dest))
-    return dest
-
-
 def _open_climate_dataset(s3, bucket: str, manifest: dict, work_dir: Path) -> xr.Dataset:
-    paths = [_download(s3, bucket, f["s3_key"], work_dir) for f in manifest["files"]]
+    paths = [_download(s3, bucket, f["s3_key"], work_dir / Path(f["s3_key"]).name) for f in manifest["files"]]
     return xr.open_mfdataset([str(p) for p in paths], combine="by_coords")
 
 
 def _open_yield_dataset(s3, bucket: str, manifest: dict, work_dir: Path) -> xr.Dataset:
     """LPJmL's time coordinate is a season-index, not real calendar time (units like "growing
-    seasons since 1601-01-01", calendar "360_day") — a real, now-confirmed case of the risk
-    extract.py's module docstring flagged as unverified. xarray's default decode_times=True tries
-    to CF-decode it anyway and fails before yield_season_start_year/yield_grid_mean ever run,
-    since "growing seasons" isn't a real time unit cftime recognizes. decode_times=False leaves
-    the raw numeric season index alone, which is exactly what those functions already expect."""
-    path = _download(s3, bucket, manifest["s3_key"], work_dir)
+    seasons since 1601-01-01", calendar "360_day") — decode_times=False leaves the raw numeric
+    season index alone, which is what extract.py's yield functions expect."""
+    path = _download(s3, bucket, manifest["s3_key"], work_dir / Path(manifest["s3_key"]).name)
     return xr.open_dataset(path, decode_times=False)
 
 
 def _assert_grid_shape(dataset: xr.Dataset, variable: str) -> None:
-    """LPJmL yield data is assumed to share the climate driver grid (720x360, 0.5deg) — ISIMIP's
-    protocol mandates a common grid across sectors, and this session verified the variable-name
-    convention live, but the actual array shape hasn't been directly inspected. Fail loudly here
-    rather than silently misalign a global grid."""
     sizes = dataset[variable].sizes
     if sizes.get("lat") != EXPECTED_GRID_LAT or sizes.get("lon") != EXPECTED_GRID_LON:
         raise ValueError(
@@ -170,6 +163,38 @@ def _assert_grid_shape(dataset: xr.Dataset, variable: str) -> None:
             f"{{'lat': {EXPECTED_GRID_LAT}, 'lon': {EXPECTED_GRID_LON}}} — "
             "LPJmL/climate grid mismatch, investigate before trusting this run's output."
         )
+
+
+def get_or_compute_gwl_year_table(s3, bucket: str, manifest_dir: Path, work_dir: Path) -> list[dict]:
+    """The one real cross-field dependency — see module docstring. Symmetric across all 8 field
+    units: whichever runs first computes and uploads it, the rest just download it."""
+    existing = _head_json(s3, bucket, "processed/global/gwl_year_table.json")
+    if existing is not None:
+        table, _ = existing
+        return table
+
+    tas_preindustrial_manifest = _load_manifest(s3, bucket, manifest_dir, "tas_preindustrial")
+    tas_future_manifest = _load_manifest(s3, bucket, manifest_dir, "tas_future")
+    tas_preindustrial_ds = _open_climate_dataset(s3, bucket, tas_preindustrial_manifest, work_dir)
+    tas_future_ds = _open_climate_dataset(s3, bucket, tas_future_manifest, work_dir)
+
+    preindustrial_ref = preindustrial_reference(tas_preindustrial_ds)
+    gwl_year_table = sorted(
+        (
+            {"gwl_c": round(gwl_for_year(tas_future_ds, year, preindustrial_ref), 3), "year": year}
+            for year in VALID_CENTER_YEARS
+        ),
+        key=lambda entry: entry["gwl_c"],
+    )
+
+    s3.put_object(
+        Bucket=bucket,
+        Key="processed/global/gwl_year_table.json",
+        Body=json.dumps(gwl_year_table, sort_keys=True).encode("utf-8"),
+        ContentType="application/json",
+    )
+    write_manifest(gwl_year_table, manifest_dir / "gwl_year_table.json")
+    return gwl_year_table
 
 
 def _write_field_window(
@@ -181,179 +206,129 @@ def _write_field_window(
     ds.attrs["year"] = year
     ds.attrs["gwl_c"] = round(gwl_c, 3)
     ds.attrs["change_kind"] = kind
-    # No explicit engine — same default (netCDF4, already a real production dependency) as
-    # every open_dataset/open_mfdataset call elsewhere in this pipeline. h5netcdf is dev-only,
-    # used by the separate storage-format benchmark, not this production path.
     ds.to_netcdf(path)
     return path
 
 
-def process_global(bucket: str, manifest_dir: Path, work_dir: Path, out_dir: Path) -> dict:
+def _load_field_data(s3, bucket: str, field: str, baseline_manifest: dict, future_manifest: dict, work_dir: Path):
+    """Returns (baseline_grid, future_window_fn) for one field — future_window_fn(start_year,
+    end_year) -> xr.DataArray, the per-cell mean over that window."""
+    if field in CROP_FIELDS:
+        baseline_ds = _open_yield_dataset(s3, bucket, baseline_manifest, work_dir)
+        future_ds = _open_yield_dataset(s3, bucket, future_manifest, work_dir)
+        variable = f"yield-{CROPS[field]}-noirr"
+        _assert_grid_shape(baseline_ds, variable)
+        baseline_grid = yield_grid_mean(baseline_ds, variable, BASELINE_START_YEAR, BASELINE_END_YEAR)
+        return baseline_grid, lambda s, e: yield_grid_mean(future_ds, variable, s, e)
+
+    if field in ("tas", "pr"):
+        baseline_ds = _open_climate_dataset(s3, bucket, baseline_manifest, work_dir)
+        future_ds = _open_climate_dataset(s3, bucket, future_manifest, work_dir)
+        baseline_grid = grid_mean(baseline_ds, field, BASELINE_START_YEAR, BASELINE_END_YEAR)
+        return baseline_grid, lambda s, e: grid_mean(future_ds, field, s, e)
+
+    if field == "consecutive_dry_days":
+        baseline_ds = _open_climate_dataset(s3, bucket, baseline_manifest, work_dir)
+        future_ds = _open_climate_dataset(s3, bucket, future_manifest, work_dir)
+        baseline_years = consecutive_dry_days_per_year(baseline_ds)
+        baseline_grid = baseline_years.sel(year=slice(BASELINE_START_YEAR, BASELINE_END_YEAR)).mean(dim="year")
+        future_years = consecutive_dry_days_per_year(future_ds)
+        return baseline_grid, lambda s, e: future_years.sel(year=slice(s, e)).mean(dim="year")
+
+    if field == "extreme_heat_days":
+        baseline_ds = _open_climate_dataset(s3, bucket, baseline_manifest, work_dir)
+        future_ds = _open_climate_dataset(s3, bucket, future_manifest, work_dir)
+        baseline_years = extreme_heat_days_per_year(baseline_ds)
+        baseline_grid = baseline_years.sel(year=slice(BASELINE_START_YEAR, BASELINE_END_YEAR)).mean(dim="year")
+        future_years = extreme_heat_days_per_year(future_ds)
+        return baseline_grid, lambda s, e: future_years.sel(year=slice(s, e)).mean(dim="year")
+
+    raise ValueError(f"Unknown field {field!r}")
+
+
+def process_field(bucket: str, manifest_dir: Path, work_dir: Path, out_dir: Path, field: str) -> dict:
     s3 = boto3.client("s3")
     work_dir.mkdir(parents=True, exist_ok=True)
+    manifest_dir.mkdir(parents=True, exist_ok=True)
 
-    tas_preindustrial_manifest = _load_manifest(manifest_dir, "tas_preindustrial")
-    tas_baseline_manifest = _load_manifest(manifest_dir, "tas_baseline")
-    pr_baseline_manifest = _load_manifest(manifest_dir, "pr_baseline")
-    tas_future_manifest = _load_manifest(manifest_dir, "tas_future")
-    pr_future_manifest = _load_manifest(manifest_dir, "pr_future")
-    yield_baseline_manifests = {c: _load_manifest(manifest_dir, f"lpjml_{c}_baseline") for c in CROPS}
-    yield_future_manifests = {c: _load_manifest(manifest_dir, f"lpjml_{c}_future") for c in CROPS}
+    baseline_name, future_name = FIELD_MANIFESTS[field]
+    baseline_manifest = _load_manifest(s3, bucket, manifest_dir, baseline_name)
+    future_manifest = _load_manifest(s3, bucket, manifest_dir, future_name)
+    fingerprint = compute_input_fingerprint([baseline_manifest, future_manifest])
 
-    input_manifests = [
-        tas_preindustrial_manifest,
-        tas_baseline_manifest,
-        pr_baseline_manifest,
-        tas_future_manifest,
-        pr_future_manifest,
-        *yield_baseline_manifests.values(),
-        *yield_future_manifests.values(),
-    ]
-    fingerprint = compute_input_fingerprint(input_manifests)
-
-    existing = _existing_manifest_and_fingerprint(s3, bucket)
+    manifest_key = f"processed/global/_manifests/{field}.json"
+    existing = _head_json(s3, bucket, manifest_key)
     if existing is not None and existing[1] == fingerprint:
         existing_manifest, _ = existing
-        print(
-            f"Input fingerprint unchanged ({fingerprint[:12]}...) — all raw inputs match the "
-            "last successful run, skipping download and recompute entirely."
-        )
+        print(f"[{field}] Input fingerprint unchanged ({fingerprint[:12]}...) — skipping.")
         return {**existing_manifest, "skipped": True, "input_fingerprint": fingerprint}
 
-    tas_preindustrial_ds = _open_climate_dataset(s3, bucket, tas_preindustrial_manifest, work_dir)
-    tas_baseline_ds = _open_climate_dataset(s3, bucket, tas_baseline_manifest, work_dir)
-    pr_baseline_ds = _open_climate_dataset(s3, bucket, pr_baseline_manifest, work_dir)
-    tas_future_ds = _open_climate_dataset(s3, bucket, tas_future_manifest, work_dir)
-    pr_future_ds = _open_climate_dataset(s3, bucket, pr_future_manifest, work_dir)
-    yield_baseline_ds = {c: _open_yield_dataset(s3, bucket, yield_baseline_manifests[c], work_dir) for c in CROPS}
-    yield_future_ds = {c: _open_yield_dataset(s3, bucket, yield_future_manifests[c], work_dir) for c in CROPS}
+    gwl_year_table = get_or_compute_gwl_year_table(s3, bucket, manifest_dir, work_dir)
+    gwl_by_year = {entry["year"]: entry["gwl_c"] for entry in gwl_year_table}
 
-    for c in CROPS:
-        _assert_grid_shape(yield_baseline_ds[c], f"yield-{CROPS[c]}-noirr")
-
-    preindustrial_ref = preindustrial_reference(tas_preindustrial_ds)
-
-    baseline_grids = {
-        "tas": grid_mean(tas_baseline_ds, "tas", BASELINE_START_YEAR, BASELINE_END_YEAR),
-        "pr": grid_mean(pr_baseline_ds, "pr", BASELINE_START_YEAR, BASELINE_END_YEAR),
-    }
-    baseline_grids["consecutive_dry_days"] = (
-        consecutive_dry_days_per_year(pr_baseline_ds)
-        .sel(year=slice(BASELINE_START_YEAR, BASELINE_END_YEAR))
-        .mean(dim="year")
-    )
-    baseline_grids["extreme_heat_days"] = (
-        extreme_heat_days_per_year(tas_baseline_ds)
-        .sel(year=slice(BASELINE_START_YEAR, BASELINE_END_YEAR))
-        .mean(dim="year")
-    )
-    for crop in CROPS:
-        baseline_grids[crop] = yield_grid_mean(
-            yield_baseline_ds[crop], f"yield-{CROPS[crop]}-noirr", BASELINE_START_YEAR, BASELINE_END_YEAR
-        )
-
-    future_dry_days_years = consecutive_dry_days_per_year(pr_future_ds)
-    future_heat_days_years = extreme_heat_days_per_year(tas_future_ds)
+    baseline_grid, future_window = _load_field_data(s3, bucket, field, baseline_manifest, future_manifest, work_dir)
 
     manifest_entries = []
-    gwl_year_table = []
     for year in VALID_CENTER_YEARS:
         start_year, end_year = window_for_year(year)
-        gwl_c = gwl_for_year(tas_future_ds, year, preindustrial_ref)
-        gwl_year_table.append({"gwl_c": round(gwl_c, 3), "year": year})
+        gwl_c = gwl_by_year[year]
+        window_grid = future_window(start_year, end_year)
 
-        window_grids = {
-            "tas": grid_mean(tas_future_ds, "tas", start_year, end_year),
-            "pr": grid_mean(pr_future_ds, "pr", start_year, end_year),
-            "consecutive_dry_days": future_dry_days_years.sel(year=slice(start_year, end_year)).mean(dim="year"),
-            "extreme_heat_days": future_heat_days_years.sel(year=slice(start_year, end_year)).mean(dim="year"),
-        }
-        for crop in CROPS:
-            window_grids[crop] = yield_grid_mean(
-                yield_future_ds[crop], f"yield-{CROPS[crop]}-noirr", start_year, end_year
+        for kind in FIELD_VARIANTS[field]:
+            change = (
+                absolute_change(window_grid, baseline_grid)
+                if kind == "absolute"
+                else percent_change_grid(window_grid, baseline_grid)
+            )
+            output_field = output_field_name(field, kind)
+            path = _write_field_window(change, output_field, kind, year, gwl_c, out_dir / output_field)
+            key = f"processed/global/{output_field}/y{year}.nc"
+            s3.upload_file(str(path), bucket, key)
+            manifest_entries.append(
+                {"field": output_field, "kind": kind, "year": year, "gwl_c": round(gwl_c, 3), "s3_key": key}
             )
 
-        for field in ALL_FIELDS:
-            for kind in FIELD_VARIANTS[field]:
-                change = (
-                    absolute_change(window_grids[field], baseline_grids[field])
-                    if kind == "absolute"
-                    else percent_change_grid(window_grids[field], baseline_grids[field])
-                )
-
-                output_field = output_field_name(field, kind)
-                path = _write_field_window(change, output_field, kind, year, gwl_c, out_dir / output_field)
-                key = f"processed/global/{output_field}/y{year}.nc"
-                s3.upload_file(str(path), bucket, key)
-                manifest_entries.append(
-                    {"field": output_field, "kind": kind, "year": year, "gwl_c": round(gwl_c, 3), "s3_key": key}
-                )
-
-    return {
-        "fields": manifest_entries,
-        "gwl_year_table": sorted(gwl_year_table, key=lambda entry: entry["gwl_c"]),
+    output = {
+        "field": field,
+        "entries": manifest_entries,
         "provenance": {
             "climate_model": "GFDL-ESM4",
             "scenario": "SSP3-7.0",
             "crop_model": "LPJmL",
             "baseline_start_year": BASELINE_START_YEAR,
             "baseline_end_year": BASELINE_END_YEAR,
-            "preindustrial_reference_tas_k": round(preindustrial_ref, 4),
             "processed_at": datetime.now(UTC).isoformat(),
         },
         "skipped": False,
         "input_fingerprint": fingerprint,
     }
 
+    s3.put_object(
+        Bucket=bucket,
+        Key=manifest_key,
+        Body=json.dumps(output, sort_keys=True).encode("utf-8"),
+        ContentType="application/json",
+        Metadata={"input-fingerprint": fingerprint},
+    )
+    write_manifest(output, manifest_dir / f"{field}_manifest.json")
+    return output
+
 
 def main() -> None:
     parser = argparse.ArgumentParser()
+    parser.add_argument("--field", required=True, choices=ALL_FIELDS)
     parser.add_argument("--bucket", required=True)
     parser.add_argument("--manifest-dir", required=True, type=Path)
     parser.add_argument("--work-dir", required=True, type=Path)
     parser.add_argument("--out-dir", required=True, type=Path)
     args = parser.parse_args()
 
-    output = process_global(args.bucket, args.manifest_dir, args.work_dir, args.out_dir)
-
-    # Written every run, skipped or not — DVC needs its declared outs to exist, and on a skip
-    # they're identical to the last successful run's (that's the point of the fingerprint match).
-    out_path = write_manifest(output, args.manifest_dir / "global_precompute_manifest.json")
-    # Bare list, matching the S3 copy's shape exactly (not wrapped in {"gwl_year_table": [...]}) —
-    # ADR-005 calls for "the one compact object timecode() actually needs," and a bare array of
-    # {gwl_c, year} pairs is that, with no reason for local and S3 to disagree on the shape of
-    # what's meant to be the same artifact.
-    gwl_table_path = write_manifest(output["gwl_year_table"], args.manifest_dir / "gwl_year_table.json")
+    output = process_field(args.bucket, args.manifest_dir, args.work_dir, args.out_dir, args.field)
 
     if output["skipped"]:
-        print(f"Skipped — wrote {out_path} and {gwl_table_path} from the last successful run, nothing new to upload.")
-        return
-
-    s3 = boto3.client("s3")
-    s3.put_object(
-        Bucket=args.bucket,
-        Key="processed/global/manifest.json",
-        Body=json.dumps(output, sort_keys=True).encode("utf-8"),
-        ContentType="application/json",
-        # Read back by _existing_manifest_and_fingerprint() on the next run to decide whether to
-        # skip — same "state lives in S3 object metadata" convention stream_to_s3.py already uses.
-        Metadata={"input-fingerprint": output["input_fingerprint"]},
-    )
-    # timecode()'s dedicated artifact (ADR-005's flagged gap): the one compact gwl->year object a
-    # direct lookup needs, not the 871-entry field manifest every consumer would otherwise have to
-    # scan.
-    s3.put_object(
-        Bucket=args.bucket,
-        Key="processed/global/gwl_year_table.json",
-        Body=json.dumps(output["gwl_year_table"], sort_keys=True).encode("utf-8"),
-        ContentType="application/json",
-    )
-
-    print(
-        f"Wrote {out_path}, {gwl_table_path}, s3://{args.bucket}/processed/global/manifest.json, and "
-        f"s3://{args.bucket}/processed/global/gwl_year_table.json ({len(output['fields'])} fields, "
-        f"{len(output['gwl_year_table'])} gwl_year_table entries)"
-    )
+        print(f"[{args.field}] Skipped — inputs unchanged since the last successful run.")
+    else:
+        print(f"[{args.field}] Wrote {len(output['entries'])} field-windows to s3://{args.bucket}/processed/global/")
 
 
 if __name__ == "__main__":

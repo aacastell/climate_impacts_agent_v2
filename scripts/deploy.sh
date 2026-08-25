@@ -18,15 +18,13 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 "$ROOT/scripts/check-aws-credentials.sh"
 "$ROOT/scripts/provision-infra.sh"
 "$ROOT/scripts/run-codebuild.sh" "ClimateImpactsFrontendBuild"
-# Runs as 5 separate CodeBuild builds, not one call here — this account's
-# CodeBuild builds are capped at ~45 minutes regardless of the project's own
-# configured timeout, well under what one build covering all 12 fetch
-# stages needs. See scripts/run-isimip-fetch.sh and pipeline/README.md.
+# 13 fully independent CodeBuild projects, one per fetch stage — not one shared project with
+# parameterized triggers. See scripts/run-isimip-fetch.sh and
+# infra/stacks/pipeline_step_build_project_stack.py.
 "$ROOT/scripts/run-isimip-fetch.sh"
-# Its own script, its own step — fetch and process are separate DVC stages for real reasons
-# (ADR-006 Step 8), not just separate commands, so their triggers stay separate too. See
-# scripts/run-process-global.sh and pipeline/README.md.
-"$ROOT/scripts/run-process-global.sh"
+# 8 fully independent CodeBuild projects, one per process field — same separation, same reason.
+# See scripts/run-process-fields.sh.
+"$ROOT/scripts/run-process-fields.sh"
 
 DOMAIN=$(python3 -c "import json; print(json.load(open('$ROOT/infra/outputs.json'))['ClimateImpactsFrontendHosting']['DistributionDomainName'])")
 echo "==> Live at https://$DOMAIN"

@@ -12,8 +12,10 @@ import argparse
 from datetime import UTC, datetime
 from pathlib import Path
 
+import boto3
+
 from climate_pipeline.fetch.isimip_client import only_file, search_dataset
-from climate_pipeline.fetch.manifest import write_manifest
+from climate_pipeline.fetch.manifest import upload_manifest, write_manifest
 from climate_pipeline.fetch.profiling import record_run
 from climate_pipeline.fetch.stream_to_s3 import stream_file_to_s3
 
@@ -62,6 +64,7 @@ def fetch_agriculture(crop: str, window: str, bucket: str, manifest_dir: Path) -
 
     record_run(bucket, f"lpjml_{crop}_{window}", started_at, [manifest])
 
+    upload_manifest(boto3.client("s3"), bucket, manifest, f"manifests/lpjml_{crop}_{window}.json")
     return write_manifest(manifest, manifest_dir / f"lpjml_{crop}_{window}.json")
 
 

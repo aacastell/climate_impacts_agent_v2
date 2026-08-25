@@ -38,8 +38,10 @@ import re
 from datetime import UTC, datetime
 from pathlib import Path
 
+import boto3
+
 from climate_pipeline.fetch.isimip_client import search_dataset
-from climate_pipeline.fetch.manifest import write_manifest
+from climate_pipeline.fetch.manifest import upload_manifest, write_manifest
 from climate_pipeline.fetch.profiling import record_run
 from climate_pipeline.fetch.stream_to_s3 import stream_file_to_s3
 
@@ -103,16 +105,17 @@ def fetch_climate_variable(variable: str, window: str, bucket: str, manifest_dir
 
     record_run(bucket, f"{variable}_{window}", started_at, file_manifests)
 
-    return write_manifest(
-        {
-            "variable": variable,
-            "scenario": spec["climate_scenario"],
-            "target_start_year": spec["start_year"],
-            "target_end_year": spec["end_year"],
-            "files": file_manifests,
-        },
-        manifest_dir / f"{variable}_{window}.json",
-    )
+    manifest = {
+        "variable": variable,
+        "scenario": spec["climate_scenario"],
+        "target_start_year": spec["start_year"],
+        "target_end_year": spec["end_year"],
+        "files": file_manifests,
+    }
+    # Direct, plain-key upload — not just the local write DVC would otherwise track. This is what
+    # a process stage invocation downloads directly, with no dvc repro/graph traversal involved.
+    upload_manifest(boto3.client("s3"), bucket, manifest, f"manifests/{variable}_{window}.json")
+    return write_manifest(manifest, manifest_dir / f"{variable}_{window}.json")
 
 
 def main() -> None:

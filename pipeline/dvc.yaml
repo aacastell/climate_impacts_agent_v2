@@ -129,28 +129,117 @@ stages:
     outs:
       - manifests/lpjml_rice_future.json
 
-  process_global:
-    cmd: python -m climate_pipeline.process.run --bucket climate-impacts-isimip-raw-148323855774 --manifest-dir manifests --work-dir work --out-dir processed_global
+  # process_global replaced by 8 independent per-field stages — each is its own CLI invocation,
+  # own S3 inputs (downloaded directly, not via this stage graph), own fingerprint skip-check. See
+  # climate_pipeline/process/run.py's module docstring for why: real profiling showed the old
+  # monolithic process_global didn't fit the account's CodeBuild time cap, and `dvc repro
+  # process_global` re-ran the whole upstream fetch graph every time (dvc.lock isn't committed to
+  # git). Kept here for local dev convenience only — CI invokes `python -m
+  # climate_pipeline.process.run --field ...` directly, not `dvc repro`, for any of these.
+  process_tas:
+    cmd: python -m climate_pipeline.process.run --field tas --bucket climate-impacts-isimip-raw-148323855774 --manifest-dir manifests --work-dir work --out-dir processed_global
     deps:
       - manifests/tas_preindustrial.json
       - manifests/tas_baseline.json
       - manifests/tas_future.json
+      - climate_pipeline/process/warming_levels.py
+      - climate_pipeline/process/extract.py
+      - climate_pipeline/process/run.py
+    outs:
+      - manifests/tas_manifest.json
+
+  process_pr:
+    cmd: python -m climate_pipeline.process.run --field pr --bucket climate-impacts-isimip-raw-148323855774 --manifest-dir manifests --work-dir work --out-dir processed_global
+    deps:
+      - manifests/tas_preindustrial.json
+      - manifests/tas_future.json
       - manifests/pr_baseline.json
       - manifests/pr_future.json
-      - manifests/lpjml_maize_baseline.json
-      - manifests/lpjml_maize_future.json
-      - manifests/lpjml_spring_wheat_baseline.json
-      - manifests/lpjml_spring_wheat_future.json
-      - manifests/lpjml_soy_baseline.json
-      - manifests/lpjml_soy_future.json
-      - manifests/lpjml_rice_baseline.json
-      - manifests/lpjml_rice_future.json
-      - climate_pipeline/fetch/agriculture.py
-      - climate_pipeline/fetch/manifest.py
+      - climate_pipeline/process/warming_levels.py
+      - climate_pipeline/process/extract.py
+      - climate_pipeline/process/run.py
+    outs:
+      - manifests/pr_manifest.json
+
+  process_consecutive_dry_days:
+    cmd: python -m climate_pipeline.process.run --field consecutive_dry_days --bucket climate-impacts-isimip-raw-148323855774 --manifest-dir manifests --work-dir work --out-dir processed_global
+    deps:
+      - manifests/tas_preindustrial.json
+      - manifests/tas_future.json
+      - manifests/pr_baseline.json
+      - manifests/pr_future.json
       - climate_pipeline/process/warming_levels.py
       - climate_pipeline/process/extract.py
       - climate_pipeline/process/indices.py
       - climate_pipeline/process/run.py
     outs:
-      - manifests/global_precompute_manifest.json
-      - manifests/gwl_year_table.json
+      - manifests/consecutive_dry_days_manifest.json
+
+  process_extreme_heat_days:
+    cmd: python -m climate_pipeline.process.run --field extreme_heat_days --bucket climate-impacts-isimip-raw-148323855774 --manifest-dir manifests --work-dir work --out-dir processed_global
+    deps:
+      - manifests/tas_preindustrial.json
+      - manifests/tas_baseline.json
+      - manifests/tas_future.json
+      - climate_pipeline/process/warming_levels.py
+      - climate_pipeline/process/extract.py
+      - climate_pipeline/process/indices.py
+      - climate_pipeline/process/run.py
+    outs:
+      - manifests/extreme_heat_days_manifest.json
+
+  process_maize:
+    cmd: python -m climate_pipeline.process.run --field maize --bucket climate-impacts-isimip-raw-148323855774 --manifest-dir manifests --work-dir work --out-dir processed_global
+    deps:
+      - manifests/tas_preindustrial.json
+      - manifests/tas_future.json
+      - manifests/lpjml_maize_baseline.json
+      - manifests/lpjml_maize_future.json
+      - climate_pipeline/fetch/agriculture.py
+      - climate_pipeline/process/warming_levels.py
+      - climate_pipeline/process/extract.py
+      - climate_pipeline/process/run.py
+    outs:
+      - manifests/maize_manifest.json
+
+  process_spring_wheat:
+    cmd: python -m climate_pipeline.process.run --field spring_wheat --bucket climate-impacts-isimip-raw-148323855774 --manifest-dir manifests --work-dir work --out-dir processed_global
+    deps:
+      - manifests/tas_preindustrial.json
+      - manifests/tas_future.json
+      - manifests/lpjml_spring_wheat_baseline.json
+      - manifests/lpjml_spring_wheat_future.json
+      - climate_pipeline/fetch/agriculture.py
+      - climate_pipeline/process/warming_levels.py
+      - climate_pipeline/process/extract.py
+      - climate_pipeline/process/run.py
+    outs:
+      - manifests/spring_wheat_manifest.json
+
+  process_soy:
+    cmd: python -m climate_pipeline.process.run --field soy --bucket climate-impacts-isimip-raw-148323855774 --manifest-dir manifests --work-dir work --out-dir processed_global
+    deps:
+      - manifests/tas_preindustrial.json
+      - manifests/tas_future.json
+      - manifests/lpjml_soy_baseline.json
+      - manifests/lpjml_soy_future.json
+      - climate_pipeline/fetch/agriculture.py
+      - climate_pipeline/process/warming_levels.py
+      - climate_pipeline/process/extract.py
+      - climate_pipeline/process/run.py
+    outs:
+      - manifests/soy_manifest.json
+
+  process_rice:
+    cmd: python -m climate_pipeline.process.run --field rice --bucket climate-impacts-isimip-raw-148323855774 --manifest-dir manifests --work-dir work --out-dir processed_global
+    deps:
+      - manifests/tas_preindustrial.json
+      - manifests/tas_future.json
+      - manifests/lpjml_rice_baseline.json
+      - manifests/lpjml_rice_future.json
+      - climate_pipeline/fetch/agriculture.py
+      - climate_pipeline/process/warming_levels.py
+      - climate_pipeline/process/extract.py
+      - climate_pipeline/process/run.py
+    outs:
+      - manifests/rice_manifest.json

@@ -16,25 +16,29 @@ if [ -z "${AWS_PROFILE:-}" ] && aws configure list-profiles 2>/dev/null | grep -
   export AWS_PROFILE="dev"
 fi
 
-PROJECT_NAME="${1:?Usage: run-codebuild.sh <codebuild-project-name> [max-wait-minutes] [dvc-target-override]}"
+PROJECT_NAME="${1:?Usage: run-codebuild.sh <codebuild-project-name> [max-wait-minutes] [run-cmd-override]}"
 # Default (30 min) fits the frontend build, which should fail fast if
-# something's wrong. Long-running builds (e.g. the ISIMIP fetch, real
+# something's wrong. Long-running builds (e.g. an ISIMIP fetch stage, real
 # transfer volume in the tens of GB) need a longer wait explicitly passed
 # as the second argument — this script has no way to know a project's
 # expected duration on its own.
 MAX_WAIT_MINUTES="${2:-30}"
-# Optional: overrides DVC_TARGET for this one build only, so the ISIMIP
-# fetch project can be run against a subset of dvc.yaml's stages instead of
-# the whole graph — see scripts/run-isimip-fetch.sh and pipeline/buildspec.yml.
-DVC_TARGET_OVERRIDE="${3:-}"
+# Optional: overrides RUN_CMD for this one build only — a direct
+# `python -m climate_pipeline...` invocation, never `dvc repro` (see
+# pipeline/buildspec.yml and pipeline/climate_pipeline/process/run.py's
+# module docstring for why `dvc repro` was dropped from CI entirely: every
+# fetch/process stage is now a fully independent unit, and routing through
+# DVC's dependency graph caused one stage's build to silently re-run
+# unrelated upstream stages, since dvc.lock is never committed to git).
+RUN_CMD_OVERRIDE="${3:-}"
 
 echo "==> Starting CodeBuild run for $PROJECT_NAME (builds main on GitHub, not local files)"
-if [ -n "$DVC_TARGET_OVERRIDE" ]; then
-  echo "==> DVC_TARGET override: $DVC_TARGET_OVERRIDE"
-  # JSON, not shorthand syntax: the value is space-separated stage names,
-  # and shorthand's comma-delimited field parsing is the wrong tool for a
-  # value that isn't a single simple token.
-  ENV_OVERRIDE_JSON=$(python3 -c "import json,sys; print(json.dumps([{'name': 'DVC_TARGET', 'value': sys.argv[1], 'type': 'PLAINTEXT'}]))" "$DVC_TARGET_OVERRIDE")
+if [ -n "$RUN_CMD_OVERRIDE" ]; then
+  echo "==> RUN_CMD: $RUN_CMD_OVERRIDE"
+  # JSON, not shorthand syntax: the value is an arbitrary command string with
+  # spaces/flags, and shorthand's comma-delimited field parsing is the wrong
+  # tool for a value that isn't a single simple token.
+  ENV_OVERRIDE_JSON=$(python3 -c "import json,sys; print(json.dumps([{'name': 'RUN_CMD', 'value': sys.argv[1], 'type': 'PLAINTEXT'}]))" "$RUN_CMD_OVERRIDE")
   BUILD_ID=$(aws codebuild start-build --project-name "$PROJECT_NAME" \
     --environment-variables-override "$ENV_OVERRIDE_JSON" \
     --query 'build.id' --output text)

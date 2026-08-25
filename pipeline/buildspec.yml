@@ -3,7 +3,17 @@ version: 0.2
 # Manually triggered only (scripts/run-codebuild.sh) — no webhook, no push
 # trigger. See ADR-006 Step 7: this pipeline updates on ISIMIP/GGCMI's own
 # release cadence, not continuously, so there's nothing to watch for.
-
+#
+# Runs exactly one command, passed in as RUN_CMD (CodeBuild
+# --environment-variables-override, see scripts/run-codebuild.sh) — a direct
+# `python -m climate_pipeline.fetch...` or `python -m climate_pipeline.process...`
+# invocation, never `dvc repro`. Each fetch/process stage is a fully
+# independent unit: its own real S3 inputs (downloaded directly by a fixed
+# key — see fetch/manifest.py's upload_manifest), its own outputs, its own
+# skip-check. Nothing here can pull another stage along as a side effect —
+# that's the whole point, see climate_pipeline/process/run.py's module
+# docstring for why `dvc repro` was dropped from CI entirely (dvc.lock isn't
+# committed to git, so it re-executed the entire upstream graph every time).
 phases:
   install:
     runtime-versions:
@@ -13,21 +23,4 @@ phases:
       - pip install -r requirements.txt
   build:
     commands:
-      # DVC bootstraps fresh every run rather than committing .dvc/ to git —
-      # skip-if-unchanged is handled at the application level (S3 checksum
-      # check in stream_to_s3.py), not via a persisted dvc.lock, so there's
-      # nothing DVC-side that needs to survive between ephemeral runs.
-      - dvc init --subdir -f
-      - dvc remote add -d isimip-raw s3://climate-impacts-isimip-raw-148323855774/dvc-cache -f
-      # DVC_TARGET, when set (via CodeBuild's --environment-variables-override,
-      # see scripts/run-isimip-fetch.sh), limits this run to specific
-      # dvc.yaml stages instead of the whole graph — see pipeline/README.md
-      # ("Why this runs as 5 separate builds, not one") for why that's
-      # necessary on this account. Unset/empty runs the full graph, same as
-      # before, so a manual `dvc repro` locally still behaves as expected.
-      # Plain `$DVC_TARGET` and an explicit if/else, not `${DVC_TARGET:-}` —
-      # that parameter-expansion-with-default syntax failed here (exit 255
-      # on the literal unexpanded string), so this avoids it entirely rather
-      # than debugging blind which shell in this image doesn't like it.
-      - if [ -n "$DVC_TARGET" ]; then dvc repro $DVC_TARGET; else dvc repro; fi
-      - dvc push
+      - eval "$RUN_CMD"
