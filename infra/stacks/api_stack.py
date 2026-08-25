@@ -82,6 +82,13 @@ class ApiStack(Stack):
             "SESSION_TABLE_NAME": session_table.table_name,
         }
 
+        # Real bug caught live in ModelServicesStack before it could repeat here: cdk deploy
+        # builds these Docker images locally, and on an Apple Silicon Mac that's ARM64 — Lambda
+        # defaults to x86_64, which would fail with "exec format error" at invocation despite the
+        # deploy itself reporting success. Matching Lambda's architecture to what's actually
+        # built avoids a second, harder-to-catch instance of the same class of bug.
+        _ARCHITECTURE = lambda_.Architecture.ARM_64
+
         interpret_fn = lambda_.DockerImageFunction(
             self,
             "InterpretFunction",
@@ -90,6 +97,7 @@ class ApiStack(Stack):
             timeout=Duration.seconds(30),
             memory_size=1024,
             environment=common_env,
+            architecture=_ARCHITECTURE,
         )
 
         narrate_fn = lambda_.DockerImageFunction(
@@ -102,6 +110,7 @@ class ApiStack(Stack):
             timeout=Duration.seconds(60),
             memory_size=1024,
             environment=common_env,
+            architecture=_ARCHITECTURE,
         )
 
         api = apigateway.RestApi(self, "ClimateImpactsApi", rest_api_name="ClimateImpactsApi")

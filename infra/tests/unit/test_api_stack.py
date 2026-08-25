@@ -29,6 +29,17 @@ def test_creates_two_lambda_functions():
     _template().resource_count_is("AWS::Lambda::Function", 2)
 
 
+def test_both_functions_run_on_arm64_matching_the_locally_built_image():
+    # Same real bug class as ModelServicesStack, caught proactively here before it could repeat:
+    # cdk deploy builds these images locally (ARM64 on an Apple Silicon Mac); Lambda defaults to
+    # x86_64, which would fail with "exec format error" at invocation despite a clean deploy.
+    resources = _template().to_json()["Resources"]
+    fns = [r for r in resources.values() if r["Type"] == "AWS::Lambda::Function"]
+    assert len(fns) == 2
+    for fn in fns:
+        assert fn["Properties"]["Architectures"] == ["arm64"]
+
+
 def test_functions_share_one_built_image_but_override_the_handler_per_function():
     # Confirmed live against the real synthesized template: cmd on DockerImageCode.from_image_asset
     # does NOT change the built image (both functions share one image asset — efficient, no

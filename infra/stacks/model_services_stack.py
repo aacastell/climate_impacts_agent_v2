@@ -47,6 +47,15 @@ class ModelServicesStack(Stack):
     ) -> None:
         super().__init__(scope, construct_id, **kwargs)
 
+        # Real, checked-live blocker, not the model this project actually wants long-term:
+        # Claude Haiku (both services' real default) is rejected outright by Bedrock —
+        # "Model use case details have not been submitted for this account" — a separate,
+        # still-open Anthropic account form, not something this code can work around. Nova Pro
+        # needs no such form and was already validated live (today's real baseline eval, 92%
+        # accuracy). Revert to the Claude Haiku default once that form clears — both app.py
+        # files already default to it, so removing this override is the entire revert.
+        _TEMPORARY_MODEL_ID = "us.amazon.nova-pro-v1:0"
+
         # No NAT gateway — real, ongoing per-hour cost for infra nobody has decided to actually
         # run yet. Public subnets with each Fargate task assigned its own public IP is the
         # standard cost-conscious pattern for outbound-only Fargate workloads (calling Bedrock,
@@ -127,6 +136,7 @@ class ModelServicesStack(Stack):
                 environment={
                     "ISIMIP_BUCKET": isimip_data_bucket.bucket_name,
                     "LOCATION_INDEX_NAME": geocode_index.index_name,
+                    "UNDERSTANDING_MODEL_ID": _TEMPORARY_MODEL_ID,
                 },
             ),
             public_load_balancer=True,
@@ -138,6 +148,16 @@ class ModelServicesStack(Stack):
             # give up without it. rollback=True actually rolls the stack back automatically
             # once the circuit breaker trips, instead of just stopping and leaving it broken.
             circuit_breaker=ecs.DeploymentCircuitBreaker(enable=True, rollback=True),
+            # Real bug caught live: cdk deploy builds Docker images locally, and on an
+            # Apple Silicon Mac that means ARM64 images — but Fargate defaults to x86_64,
+            # so the container failed with "exec format error" the moment it tried to run
+            # uvicorn, even though the image built and pushed successfully. Matching Fargate's
+            # runtime to what's actually built avoids this, and ARM64 (Graviton) Fargate is
+            # also genuinely ~20% cheaper per vCPU-hour than x86.
+            runtime_platform=ecs.RuntimePlatform(
+                cpu_architecture=ecs.CpuArchitecture.ARM64,
+                operating_system_family=ecs.OperatingSystemFamily.LINUX,
+            ),
         )
         self.understanding_service.target_group.configure_health_check(path="/health")
         understanding_scaling = self.understanding_service.service.auto_scale_task_count(min_capacity=1, max_capacity=4)
@@ -185,6 +205,20 @@ class ModelServicesStack(Stack):
                 container_port=8000,
                 task_role=narration_task_role,
                 log_driver=ecs.LogDrivers.aws_logs(stream_prefix="narration", log_group=log_group),
+                environment={
+                    "NARRATION_MODEL_ID": _TEMPORARY_MODEL_ID,
+                    # Real bug caught before it shipped: this service had NO environment block
+                    # at all, so eval_capture.py's mlflow.start_run() would have used MLflow's
+                    # own local-file default — which the installed MLflow version refuses to
+                    # initialize at all without MLFLOW_ALLOW_FILE_STORE (confirmed live earlier
+                    # this session), crashing every single /narrate call, successful or not, on
+                    # the eval-logging step after the real work was already done. No real
+                    # tracking server is provisioned yet (see docs/overnight-2026-08-25.md) —
+                    # sqlite inside the container is a genuine working backend, honestly not a
+                    # durable one: it's wiped on every task restart/redeploy. Real persistent
+                    # hosting is separate follow-up work, not blocking this from actually running.
+                    "MLFLOW_TRACKING_URI": "sqlite:////tmp/mlflow.db",
+                },
             ),
             public_load_balancer=True,
             listener_port=80,
@@ -195,6 +229,16 @@ class ModelServicesStack(Stack):
             # give up without it. rollback=True actually rolls the stack back automatically
             # once the circuit breaker trips, instead of just stopping and leaving it broken.
             circuit_breaker=ecs.DeploymentCircuitBreaker(enable=True, rollback=True),
+            # Real bug caught live: cdk deploy builds Docker images locally, and on an
+            # Apple Silicon Mac that means ARM64 images — but Fargate defaults to x86_64,
+            # so the container failed with "exec format error" the moment it tried to run
+            # uvicorn, even though the image built and pushed successfully. Matching Fargate's
+            # runtime to what's actually built avoids this, and ARM64 (Graviton) Fargate is
+            # also genuinely ~20% cheaper per vCPU-hour than x86.
+            runtime_platform=ecs.RuntimePlatform(
+                cpu_architecture=ecs.CpuArchitecture.ARM64,
+                operating_system_family=ecs.OperatingSystemFamily.LINUX,
+            ),
         )
         self.narration_service.target_group.configure_health_check(path="/health")
         narration_scaling = self.narration_service.service.auto_scale_task_count(min_capacity=1, max_capacity=4)

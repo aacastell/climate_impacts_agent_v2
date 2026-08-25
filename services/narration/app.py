@@ -7,6 +7,7 @@ curation (see corpus.py) — retrieval will return no passages until that's fill
 correct, not broken.
 """
 
+import logging
 import os
 
 import boto3
@@ -20,6 +21,7 @@ from narrate import narrate
 from retrieval import retrieve
 
 app = FastAPI(title="narration()")
+logger = logging.getLogger(__name__)
 
 MODEL_ID = os.environ.get("NARRATION_MODEL_ID", "us.anthropic.claude-haiku-4-5-20251001-v1:0")
 EMBEDDING_MODEL_ID = os.environ.get("EMBEDDING_MODEL_ID", "amazon.titan-embed-text-v2:0")
@@ -60,8 +62,14 @@ def narrate_endpoint(request: NarrateRequest) -> dict:
         request.yield_change_pct,
     )
     # Every call, not just SCIENTIFIC_DISAGREEMENT ones — PASS cases are the denominator any
-    # later accuracy metric needs (see eval_capture.py).
-    capture(result, request.region_name, request.crop_label, request.warming_level_c, climate_evidence, request.yield_change_pct)
+    # later accuracy metric needs (see eval_capture.py). Wrapped: eval/observability logging is
+    # secondary to the real answer this endpoint exists to return — a capture failure (e.g. the
+    # MLflow backend being unreachable) must never turn an already-successful narration into a
+    # 500 the caller never sees the actual result for.
+    try:
+        capture(result, request.region_name, request.crop_label, request.warming_level_c, climate_evidence, request.yield_change_pct)
+    except Exception:
+        logger.exception("eval_capture.capture() failed — narration result is still returned")
     return result
 
 

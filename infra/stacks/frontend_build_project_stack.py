@@ -84,6 +84,13 @@ class FrontendBuildProjectStack(Stack):
                     "FRONTEND_DISTRIBUTION_ID": codebuild.BuildEnvironmentVariable(
                         value=distribution.distribution_id
                     ),
+                    # Vite bakes import.meta.env.VITE_* in at build time, not runtime — without
+                    # this, every real deploy would silently keep serving frontend/src/api/
+                    # index.ts's default (MockApiClient, fully synthetic data), regardless of how
+                    # real the backend actually is. See that file's own comment: flipping this
+                    # default was deliberately left as an explicit decision, not assumed — this
+                    # is that decision, made once the real API tier exists to point at.
+                    "VITE_USE_MOCK_API": codebuild.BuildEnvironmentVariable(value="false"),
                 },
             ),
             build_spec=codebuild.BuildSpec.from_source_filename("frontend/buildspec.yml"),
