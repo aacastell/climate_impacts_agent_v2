@@ -19,6 +19,7 @@ to CF-decode "growing seasons" as a time unit.
 """
 
 import re
+from pathlib import Path
 
 import numpy as np
 import xarray as xr
@@ -152,6 +153,35 @@ def annual_mean_grid(dataset: xr.Dataset, variable: str, time_dim: str = "time")
         return xr.DataArray(means, dims=year_slice.dims[1:], coords={d: year_slice.coords[d] for d in year_slice.dims[1:]})
 
     return data.groupby(f"{time_dim}.year").map(_mean_per_year)
+
+
+def annual_mean_grid_per_file(paths: list[Path], variable: str, time_dim: str = "time") -> xr.DataArray:
+    """Same result as annual_mean_grid(), computed a different way: each file opened and reduced
+    to its own per-year means independently (xr.open_dataset, no multi-file combine), then the
+    small already-reduced results concatenated — instead of xr.open_mfdataset(combine="by_coords")
+    building one combined lazy dataset spanning every file before any reduction happens.
+
+    Why this is exactly equivalent, not an approximation: this project's raw fetch always splits
+    files on decade boundaries (see fetch/climate.py) — no single calendar year's data is ever
+    split across two files. A per-year mean is therefore always computable from exactly one file,
+    so computing it per-file and concatenating is mathematically identical to computing it from
+    one dataset covering every file, not a second approximation stacked on annual_mean_grid()'s
+    own "mean of annual means" one. Verified directly, not assumed: a real numerical-equivalence
+    test against annual_mean_grid() on real downloaded pr/tas data (see the CDD/pr timeout
+    investigation) confirmed identical output before this was trusted.
+
+    Real, still-not-fully-explained reason this exists, honestly stated rather than overclaimed:
+    `pr`'s process_field CodeBuild run timed out (~2600s) even after annual_mean_grid() fixed the
+    same timeout for tas and extreme_heat_days — reproducibly, standalone, with byte-identical
+    encoding to tas confirmed directly (dtype, chunk shape, compression). The exact mechanism
+    inside xarray/dask's multi-file combine was never pinned down at small local scale (2 of 9
+    files showed no reproducible slowdown either) — this sidesteps the whole combine step instead
+    of requiring that root cause to be found, on the theory that whatever's expensive about
+    combining 9 files' coordinate/chunk metadata together can't be expensive if that combine never
+    happens at all.
+    """
+    per_file_results = [annual_mean_grid(xr.open_dataset(path, chunks={}), variable, time_dim) for path in paths]
+    return xr.concat(per_file_results, dim="year")
 
 
 def yield_grid_mean(

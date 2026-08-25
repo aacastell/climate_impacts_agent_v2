@@ -6,6 +6,7 @@ import xarray as xr
 from climate_pipeline.process.extract import (
     absolute_change,
     annual_mean_grid,
+    annual_mean_grid_per_file,
     area_weights,
     global_area_weighted_mean,
     grid_mean,
@@ -134,6 +135,29 @@ def test_annual_mean_grid_windowed_matches_grid_mean_for_the_same_window():
     direct = grid_mean(ds, "tas", 2011, 2013)
     via_annual = annual_mean_grid(ds, "tas").sel(year=slice(2011, 2013)).mean(dim="year")
     assert np.allclose(direct.values, via_annual.values)
+
+
+def test_annual_mean_grid_per_file_matches_annual_mean_grid_on_the_combined_dataset(tmp_path):
+    # Real equivalence guard for the pr-timeout fix: splitting the same 6 years across two files
+    # (mirroring this project's real decade-aligned file boundaries — no year ever split across
+    # a file, see fetch/climate.py) and computing per-file must give the identical result to
+    # computing from one combined dataset, not an approximation stacked on top of
+    # annual_mean_grid's own accepted approximation.
+    ds = _climate_dataset()  # 3 lon x 2 lat x 6 years (2010-2015), value = calendar year everywhere
+    first_half = ds.isel(time=slice(0, 3))  # 2010-2012
+    second_half = ds.isel(time=slice(3, 6))  # 2013-2015
+    path_a = tmp_path / "a.nc"
+    path_b = tmp_path / "b.nc"
+    first_half.to_netcdf(path_a)
+    second_half.to_netcdf(path_b)
+
+    via_per_file = annual_mean_grid_per_file([path_a, path_b], "tas")
+    via_combined = annual_mean_grid(ds, "tas")
+
+    assert set(via_per_file.coords["year"].values) == set(via_combined.coords["year"].values)
+    via_per_file_sorted = via_per_file.sortby("year")
+    via_combined_sorted = via_combined.sortby("year")
+    assert np.allclose(via_per_file_sorted.values, via_combined_sorted.values)
 
 
 def test_yield_grid_mean_returns_the_full_spatial_grid():

@@ -42,7 +42,7 @@ from climate_pipeline.fetch.agriculture import CROPS
 from climate_pipeline.fetch.manifest import write_manifest
 from climate_pipeline.process.extract import (
     absolute_change,
-    annual_mean_grid,
+    annual_mean_grid_per_file,
     grid_mean,
     percent_change_grid,
     yield_grid_mean,
@@ -137,8 +137,12 @@ def _head_json(s3, bucket: str, key: str) -> tuple[dict, str] | None:
     return json.loads(obj["Body"].read()), fingerprint
 
 
+def _download_climate_files(s3, bucket: str, manifest: dict, work_dir: Path) -> list[Path]:
+    return [_download(s3, bucket, f["s3_key"], work_dir / Path(f["s3_key"]).name) for f in manifest["files"]]
+
+
 def _open_climate_dataset(s3, bucket: str, manifest: dict, work_dir: Path) -> xr.Dataset:
-    paths = [_download(s3, bucket, f["s3_key"], work_dir / Path(f["s3_key"]).name) for f in manifest["files"]]
+    paths = _download_climate_files(s3, bucket, manifest, work_dir)
     return xr.open_mfdataset([str(p) for p in paths], combine="by_coords")
 
 
@@ -183,14 +187,18 @@ def _load_field_data(s3, bucket: str, field: str, baseline_manifest: dict, futur
 
     if field in ("tas", "pr"):
         baseline_ds = _open_climate_dataset(s3, bucket, baseline_manifest, work_dir)
-        future_ds = _open_climate_dataset(s3, bucket, future_manifest, work_dir)
         # Baseline is a single fixed window, computed once regardless — grid_mean() is fine here,
-        # nothing redundant about one call. The future side is what timed out three real
-        # CodeBuild runs (see annual_mean_grid's docstring): compute the per-year mean once, then
-        # each of the 67 window calls slices+averages that small array instead of re-reading the
-        # raw daily dataset from scratch every time.
+        # nothing redundant about one call, and it's a small window (not the full 9-file future
+        # span), so open_mfdataset's combine cost is negligible here regardless.
         baseline_grid = grid_mean(baseline_ds, field, BASELINE_START_YEAR, BASELINE_END_YEAR)
-        future_years = annual_mean_grid(future_ds, field)
+        # The future side is what timed out three real CodeBuild runs (see annual_mean_grid's
+        # docstring) even after that fix — pr specifically still timed out standalone,
+        # reproducibly, with encoding confirmed byte-identical to tas. annual_mean_grid_per_file
+        # avoids xr.open_mfdataset(combine="by_coords")'s multi-file combine entirely (provably
+        # equivalent — see that function's docstring), sidestepping whatever's expensive about it
+        # rather than requiring that root cause to be pinned down first.
+        future_paths = _download_climate_files(s3, bucket, future_manifest, work_dir)
+        future_years = annual_mean_grid_per_file(future_paths, field)
         return baseline_grid, lambda s, e: future_years.sel(year=slice(s, e)).mean(dim="year")
 
     if field == "consecutive_dry_days":
