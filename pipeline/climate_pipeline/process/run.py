@@ -83,7 +83,7 @@ FIELD_VARIANTS = {
 }
 
 
-def _output_field_name(base_field: str, kind: str) -> str:
+def output_field_name(base_field: str, kind: str) -> str:
     variants = FIELD_VARIANTS[base_field]
     if len(variants) == 1:
         return base_field
@@ -281,7 +281,7 @@ def process_global(bucket: str, manifest_dir: Path, work_dir: Path, out_dir: Pat
                     else percent_change_grid(window_grids[field], baseline_grids[field])
                 )
 
-                output_field = _output_field_name(field, kind)
+                output_field = output_field_name(field, kind)
                 path = _write_field_window(change, output_field, kind, year, gwl_c, out_dir / output_field)
                 key = f"processed/global/{output_field}/y{year}.nc"
                 s3.upload_file(str(path), bucket, key)
