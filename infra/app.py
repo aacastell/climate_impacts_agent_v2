@@ -1,12 +1,16 @@
 #!/usr/bin/env python3
+import json
 import os
+from pathlib import Path
 
 import aws_cdk as cdk
 
+from stacks.api_stack import ApiStack
 from stacks.frontend_build_project_stack import FrontendBuildProjectStack
 from stacks.frontend_hosting_stack import FrontendHostingStack
 from stacks.frontend_waf_stack import FrontendWafStack
 from stacks.isimip_data_bucket_stack import IsimipDataBucketStack
+from stacks.model_services_stack import ModelServicesStack
 from stacks.pipeline_step_build_project_stack import PipelineStepBuildProjectStack
 
 app = cdk.App()
@@ -107,7 +111,21 @@ if github_owner and github_repo:
         "--manifest-dir manifests --work-dir work"
     )
 
-    for project_name, run_cmd in {**FETCH_STEPS, **PROCESS_STEPS}.items():
+    # RAG corpus source fetch — same fetch/process separation as ISIMIP (ADR-006), same
+    # per-component independence as everything else tonight. Real candidate sources found via web
+    # search (see pipeline/climate_pipeline/fetch/CORPUS_SOURCES.json,
+    # services/narration/CORPUS_SOURCES_CANDIDATES.md) — this fetches raw content only, never
+    # curates it into the actual retrievable corpus (services/narration/corpus.py stays a human
+    # review step).
+    _corpus_sources = json.loads((Path(__file__).parent.parent / "pipeline/climate_pipeline/fetch/CORPUS_SOURCES.json").read_text())
+    CORPUS_FETCH_STEPS = {
+        f"ClimateImpactsFetchCorpus{source['id'].title().replace('_', '')}": (
+            f"python -m climate_pipeline.fetch.corpus --source-id {source['id']} --bucket {bucket_name} --manifest-dir manifests"
+        )
+        for source in _corpus_sources
+    }
+
+    for project_name, run_cmd in {**FETCH_STEPS, **PROCESS_STEPS, **CORPUS_FETCH_STEPS}.items():
         PipelineStepBuildProjectStack(
             app,
             f"{project_name}Stack",
@@ -118,5 +136,28 @@ if github_owner and github_repo:
             github_repo=github_repo,
             env=cdk.Environment(account=account, region=home_region),
         )
+
+# understanding() and narration()'s real ECS/Fargate infrastructure — see
+# ModelServicesStack's own docstring for why these two specifically get scalable, persistent
+# compute (ADR-005) and why this is defined but deliberately not deployed as part of tonight's
+# unsupervised work.
+model_services = ModelServicesStack(
+    app,
+    "ClimateImpactsModelServices",
+    isimip_data_bucket=isimip_data.bucket,
+    env=cdk.Environment(account=account, region=home_region),
+)
+
+# The Lambda orchestration tier — ADR-005's resolved compute-topology decision. Points at
+# ModelServicesStack's real ALB DNS names, never hardcoded, so this stack has no implicit
+# assumption about where those services actually live.
+ApiStack(
+    app,
+    "ClimateImpactsApi",
+    isimip_data_bucket=isimip_data.bucket,
+    understanding_url=f"http://{model_services.understanding_service.load_balancer.load_balancer_dns_name}",
+    narration_url=f"http://{model_services.narration_service.load_balancer.load_balancer_dns_name}",
+    env=cdk.Environment(account=account, region=home_region),
+)
 
 app.synth()
