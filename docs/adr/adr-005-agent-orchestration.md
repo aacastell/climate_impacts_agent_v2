@@ -5,9 +5,9 @@
 **Informs:** ADR-006 (offline scientific data pipeline), ADR-007 (narration verification gate)
 **Scope:** How the system interprets a natural-language question and resolves it to a
 structured, deterministic query. Covers the *serving shape* of the agent's own tool-calling
-model (`understanding()` — an independent inference service, see Accompanying decisions) but not
-the main API's own compute topology (Lambda vs. containers), RAG/vector infrastructure, or which
-Bedrock model is used — those remain open.
+model (`understanding()` — an independent inference service, see Accompanying decisions) and now
+also the orchestration/API tier's own compute topology (Lambda — see Accompanying decisions), but
+not RAG/vector infrastructure specifics or which Bedrock model is used — those remain open.
 
 ---
 
@@ -158,6 +158,18 @@ resolution, applied to its own failures, not just to the original question.
   Kubeflow revisit-trigger language now technically satisfies (see that ADR's updated note) even
   though the actual threshold for needing Kubeflow — multiple recurring pipelines, not one model
   — still isn't met.
+- **The orchestration/API tier runs on Lambda — resolving the rest of this ADR's "backend compute
+  topology... remains open" scope note, on top of the bullet above.** This is a resource-profile
+  split, not a blanket topology choice for every service in the system: `understanding()` and the
+  RAG+narration capability (ADR-007) each hold real state worth amortizing across requests — model
+  weights in memory, retrieval/generation context — and get ECS/Fargate (or equivalent persistent
+  compute), same reasoning as the bullet above. The orchestration tier itself has nothing
+  comparable to amortize — it's a thin per-request sequence of tool calls and lookups against
+  already-precomputed data (ADR-006's process stage) — so it gets Lambda specifically because
+  there's no persistent resource a container would let it share across concurrent requests that a
+  fresh instance per invocation doesn't already handle just as well. Matches the target scale
+  (README: ~1,000 users, 2-10s typical) without needing to justify always-on compute for a tier
+  that's idle between requests.
 - **Langfuse traces the full agent path** — query → agent decisions → tool calls → retrieval →
   generation → verification → retry — specifically so a failure is diagnosable ("why did the
   agent fail on this query") rather than an opaque outcome. Hosting is managed/cloud, already

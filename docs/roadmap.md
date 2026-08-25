@@ -27,9 +27,9 @@ precomputed grid," now that the grid actually exists.
 - Region source of truth: promote the 5 demo regions out of `frontend/src/api/mockClient.ts`
   (`KNOWN_REGIONS`) into one shared definition both this lookup and the frontend read, instead of
   two copies that can drift.
-- Compute topology: Lambda, not a container — matches the README's own target scale (~1,000
-  users, 2–10s latency) and needs no persistent in-memory cache the way `understanding()` will in
-  Phase 2. Revisit only if something concrete forces it.
+- Compute topology: Lambda — now a locked decision (ADR-005), not just a Phase 1 default. The
+  orchestration tier has no persistent state to amortize the way `understanding()` (Phase 2) and
+  narration (Phase 3) do, which is why those two get ECS/Fargate and this doesn't.
 
 ---
 
