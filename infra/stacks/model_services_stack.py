@@ -1,6 +1,7 @@
 from aws_cdk import (
     CfnOutput,
     Duration,
+    RemovalPolicy,
     Stack,
     aws_ec2 as ec2,
     aws_ecs as ecs,
@@ -65,7 +66,16 @@ class ModelServicesStack(Stack):
         )
 
         log_group = logs.LogGroup(
-            self, "ModelServicesLogGroup", log_group_name="/climate-impacts/model-services", retention=logs.RetentionDays.ONE_MONTH
+            self,
+            "ModelServicesLogGroup",
+            log_group_name="/climate-impacts/model-services",
+            retention=logs.RetentionDays.ONE_MONTH,
+            # Real bug hit on a real redeploy: LogGroup defaults to RETAIN, so a rolled-back
+            # stack left this orphaned with its explicit name still claimed, and the next
+            # deploy attempt failed outright ("already exists") before ever reaching the bug
+            # it was retrying to fix. Logs aren't durable business data here — DESTROY is
+            # correct, same reasoning as the session table.
+            removal_policy=RemovalPolicy.DESTROY,
         )
 
         # Real, CDK-managed Place Index — replaces the temporary CLI-created "geocode-verification-test"
