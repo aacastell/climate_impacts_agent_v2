@@ -163,10 +163,18 @@ duplicates the other's transfer.
 
 ## Accompanying decisions
 
-- **Canonical storage format is deliberately left open.** Zarr is a candidate, but unproven
-  against this system's actual access pattern (global grid, sliced by region and indicator at
-  query time). Deciding this now, ahead of testing it against real access patterns, would
-  misrepresent an untested guess as a settled architectural decision.
+- **Canonical storage format: resolved, not still open — tested against the real access pattern,
+  not guessed.** Zarr was the leading candidate specifically for its chunked, partial-S3-read
+  behavior; a real local benchmark (synthetic data at real grid size, chunk-size sweep, and a
+  synthetic-S3-latency model once local-disk timing alone proved misleading) showed that
+  advantage never gets exercised here. Tracing the actual query shape settled it: a resolved
+  query only ever needs a *bounded* number of *whole* small objects — one per (field, window),
+  ~1MB each (720×360 float32) — never a partial slice out of one large array. Every known
+  consumer (a query-time regional-stats lookup, offline map-tile generation) does a whole-object
+  read, not a partial one. Plain NetCDF is the actual decision: one small object per
+  (field-variant, window) — see ADR-006's process-stage output layout (`pipeline/README.md`) —
+  not Zarr's chunking sophistication, which would be solving a problem this access pattern
+  doesn't have.
 - **The canonical scientific format and the frontend's map-delivery format are not assumed to be
   the same file.** The backend's access pattern is arbitrary-cell lookup for regional statistics;
   the frontend's (ADR-004) is tiles/pixels for shading a map — genuinely different consumption
@@ -240,8 +248,6 @@ duplicates the other's transfer.
 
 ## Revisit triggers
 
-- **The access pattern is tested against a real storage format candidate** (Zarr or otherwise) —
-  resolves the one deliberately open item in this ADR.
 - **Counterfactual questions clear scientific scope review** — this ADR's pipeline shape may need
   to expand to support them; that expansion should be designed against the actual approved scope,
   not guessed at now.
@@ -249,11 +255,15 @@ duplicates the other's transfer.
   stops being sufficient — reopens Step 5's Airflow rejection.
 - **A real training loop enters the system** — reopens Step 6's Kubeflow rejection, informed by
   whatever the actual training/fine-tuning need turns out to be (see ADR-007's evaluation-data
-  capture, which is what would eventually feed such a loop). The concrete future shape most
-  likely to justify it: the system expanding from agriculture into other ISIMIP sectors
-  (fisheries, biome, etc.), each needing its own specialist model with its own recurring
-  training/evaluation/promotion pipeline behind a routing layer — multiple recurring pipelines
-  is the actual trigger, not "one model, occasionally fine-tuned."
+  capture, which is what would eventually feed such a loop). **Update: this trigger's letter is
+  now satisfied** — a fine-tuned `understanding()` model (ADR-005) means a real training/
+  fine-tuning step now exists in the system, the first one — **but the actual threshold isn't
+  met.** This ADR already named the real trigger precisely: "multiple recurring pipelines is the
+  actual trigger, not one model, occasionally fine-tuned." One fine-tuned model, on its own
+  training cadence, doesn't yet need Kubeflow's orchestration; the concrete future shape that
+  would is still the system expanding from agriculture into other ISIMIP sectors (fisheries,
+  biome, etc.), each needing its own specialist model with its own recurring
+  training/evaluation/promotion pipeline behind a routing layer.
 - **Update cadence changes** — if GGCMI or ISIMIP releases start arriving frequently enough that
   manual trigger-tracking (Step 7) becomes a bottleneck, revisit whether a lightweight scheduled
   check is worth adding — still short of the daily-polling architecture this ADR rejects outright.

@@ -4,8 +4,10 @@
 **Depends on:** ADR-004 (map data delivery)
 **Informs:** ADR-006 (offline scientific data pipeline), ADR-007 (narration verification gate)
 **Scope:** How the system interprets a natural-language question and resolves it to a
-structured, deterministic query. Does not cover backend compute topology (Lambda vs.
-containers), RAG/vector infrastructure, or which Bedrock model is used — those remain open.
+structured, deterministic query. Covers the *serving shape* of the agent's own tool-calling
+model (`understanding()` — an independent inference service, see Accompanying decisions) but not
+the main API's own compute topology (Lambda vs. containers), RAG/vector infrastructure, or which
+Bedrock model is used — those remain open.
 
 ---
 
@@ -107,21 +109,55 @@ resolution, applied to its own failures, not just to the original question.
   extended to cover mid-resolution clarification turns, not just repeat questions.
 - **`geocode()`, `crop()`, and `timecode()` are not equally simple.** `geocode()` has to handle
   genuine ambiguity — "Mekong" can resolve to more than one candidate region — which is exactly
-  the kind of case Step 4's recovery behavior exists for. `crop()` resolves synonyms, spelling
-  variation, and regional naming (corn vs. maize). `timecode()` has two distinct modes: a
-  *current* mode that's essentially a lookup table (warming level → precomputed time window,
-  small and static), and a *future* mode for arbitrary perturbation questions ("how would an
-  arbitrary increase in consecutive dry days affect rice yields") that can't be served from a
-  lookup table, since region × arbitrary magnitude is combinatorial. That future mode is kept
-  planned, not implemented — it's the same "planned, not built" scope discipline ADR-006 applies
-  to counterfactual questions, and not a coincidence: this is the tool that would actually serve
-  those questions once counterfactual scope is approved.
+  the kind of case Step 4's recovery behavior exists for. Its output isn't just a lat/lon: the
+  useful shape for the scientific layer to consume is closer to `{name, centroid, bbox, geometry,
+  selected grid cells}`, resolved via bbox filtering (cheap) then geometry filtering (precise)
+  against the precomputed global grid — cheap specifically because it's arithmetic against a
+  known, regular grid (ADR-006's grid layout), not a spatial-database query. Amazon Location
+  Service is a candidate implementation behind this interface, not a commitment — the agent and
+  the scientific layer only depend on `geocode()`'s output shape, never on which provider produces
+  it, the same reference-not-implementation pattern this ADR already uses for the tool-calling
+  model itself. `crop()` resolves synonyms, spelling variation, and regional naming (corn vs.
+  maize). `timecode()` is still, mechanically, a lookup table — `table[gwl] -> timewindow` — an
+  earlier draft of this ADR called it "small," which undersold it: ADR-006's process stage now
+  computes GWL for 67 individual years, not 3-4 checkpoints, so the real table has 67 entries, not
+  a handful. **Known gap, not yet closed:** the process stage writes a `gwl_c` value alongside
+  every field-window it produces, but never emits this table as its own small, dedicated artifact
+  — the mapping currently only exists duplicated across ~871 field-window manifest entries, not as
+  the one compact object `timecode()` actually needs for a direct lookup. This was meant to be
+  built alongside the precompute pipeline and was missed — an implementation oversight, not a
+  deferred scope decision like the *future* mode below. `timecode()`'s *future* mode, for
+  arbitrary perturbation questions ("how would an arbitrary increase in consecutive dry days
+  affect rice yields") can't be served from a lookup table at all, since region × arbitrary
+  magnitude is combinatorial. That mode is kept planned, not implemented — the same "planned, not
+  built" scope discipline ADR-006 applies to counterfactual questions, and not a coincidence: this
+  is the tool that would actually serve those questions once counterfactual scope is approved.
 - **The agent's own model is a distinct, smaller model from the narration model.** Tool-calling
   and resolution don't need the same capability narration does (ADR-007) — narration needs
   enough capacity to synthesize climate evidence and retrieved literature into coherent text,
   which is why that path leans toward Bedrock specifically. Using one model for both would be
   either over-provisioning resolution or under-provisioning narration. The exact tool-calling
-  model, like the exact Bedrock model, remains open.
+  model, like the exact Bedrock model, remains open. **This model is `understanding()`** — see
+  the next bullet for its serving shape; naming it explicitly here so "the Understanding Agent"
+  (this ADR's orchestrator) and "`understanding()`" (the model that orchestrator's tool-calling
+  runs on) don't read as two competing concepts. The agent is the orchestration logic;
+  `understanding()` is the model powering its interpretation step.
+- **`understanding()` is planned as an independently deployable inference service, not folded
+  into the API process — resolving part of this ADR's own "backend compute topology... remains
+  open" scope note, though not all of it.** Not *which* model — that's still open, per the bullet
+  above — but *how* it's served. Expected to be small and CPU-only, so the initial serving shape
+  is a plain FastAPI process behind EC2, ECS/Fargate, or a SageMaker endpoint — candidates, not a
+  commitment — deliberately without reaching for Triton or vLLM ahead of a demonstrated need for
+  them, the same reasoning ADR-006 already applies to Airflow and Kubeflow. This earns a real
+  service boundary rather than staying an in-process call because it has a genuinely different
+  resource/scaling profile than the rest of the API (a model held in memory, CPU-bound inference,
+  its own latency curve) and its own lifecycle (fine-tuning, versioning, retraining) independent
+  of the API's own request-handling code — not "the project has an ML model, so it needs a
+  service." This is also, as far as this project currently plans, the only place a `model.train()`
+  step exists at all — worth being explicit about, since it's the concrete trigger ADR-006's
+  Kubeflow revisit-trigger language now technically satisfies (see that ADR's updated note) even
+  though the actual threshold for needing Kubeflow — multiple recurring pipelines, not one model
+  — still isn't met.
 - **Langfuse traces the full agent path** — query → agent decisions → tool calls → retrieval →
   generation → verification → retry — specifically so a failure is diagnosable ("why did the
   agent fail on this query") rather than an opaque outcome. Hosting is managed/cloud, already
