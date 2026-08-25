@@ -4,8 +4,10 @@
 **Depends on:** ADR-005 (agent orchestration), ADR-006 (offline scientific data pipeline —
 supplies the held-out yield projection)
 **Scope:** How generated narration is checked against the scientific projection it's supposed to
-explain, and what happens when it doesn't match. Does not cover which Bedrock model is used,
-RAG/vector infrastructure choice, or the eventual continuous-training (CT) pipeline design.
+explain, and what happens when it doesn't match. Does not cover which Bedrock model is used, the
+specific vector database/embedding technology, or the eventual continuous-training (CT) pipeline
+design. RAG's *service boundary* — bundled with narration, not split into a separate service — is
+resolved; see Accompanying decisions.
 
 ---
 
@@ -105,6 +107,14 @@ ahead of any evidence it's needed.
   exclusively from ADR-006's pipeline. If RAG could return a number, it would reopen exactly the
   hole this ADR closes: an unverified numeric claim entering narration from a second, uncontrolled
   path.
+- **RAG, generation, and verification are one deployable capability, not split into separate
+  services.** RAG's only current consumer is narration — splitting it out now would add a network
+  hop with no second consumer to justify it, the same "no boundary without demonstrated need"
+  reasoning this project already applies to Airflow (ADR-006) and to keeping `crop()`/`timecode()`
+  as local tools rather than services (ADR-005). Revisit if RAG ever needs to serve a consumer
+  beyond narration. This resolves the service-boundary half of this ADR's "RAG/vector
+  infrastructure... remain[s] open" scope note — the specific vector database/embedding technology
+  is still open; only the deployment topology is settled.
 - **Bedrock is the candidate for narration specifically because it needs more capability than the
   agent's own tool-calling model** (ADR-005) — synthesizing climate evidence and retrieved
   literature into coherent, accurate text is a harder generation task than resolving a region or

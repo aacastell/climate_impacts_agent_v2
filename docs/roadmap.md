@@ -56,9 +56,14 @@ verification gate confirming narration never touches or alters a scientific valu
 
 **Builds on:** Phase 1 (facts to narrate), Phase 2 (the resolved query narration responds to).
 
-**No default proposed here** — vector store and Bedrock model choice are both still genuinely
-open and neither blocks Phase 1 or 2, so they're worth deciding when this phase actually starts,
-not pre-committed now.
+**Defaults:**
+- Service boundary: RAG, generation, and verification deploy as one capability, not split into
+  separate services (ADR-007) — RAG's only consumer is narration, no second consumer yet to
+  justify the extra network hop.
+
+**Still genuinely open, no default proposed:** the specific vector store and Bedrock model choice
+— neither blocks Phase 1 or 2, so worth deciding when this phase actually starts, not
+pre-committed now.
 
 ---
 
