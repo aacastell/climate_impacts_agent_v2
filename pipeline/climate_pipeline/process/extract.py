@@ -121,6 +121,39 @@ def grid_mean(dataset: xr.Dataset, variable: str, start_year: int, end_year: int
     return windowed.mean(dim="time")
 
 
+def annual_mean_grid(dataset: xr.Dataset, variable: str, time_dim: str = "time") -> xr.DataArray:
+    """Per-cell, per-calendar-year mean of `variable`, computed once for the whole dataset — the
+    reusable input a 20-year window average should be built from, instead of calling grid_mean()
+    fresh per window.
+
+    Real, confirmed-live reason this exists: run.py's tas/pr branches originally called grid_mean()
+    once per future window (67 times), each a fresh .sel(time=slice(...)).mean() over the raw
+    daily dataset. Since consecutive windows overlap in 19 of their 20 years, that's ~20x
+    redundant re-reads of the same daily data — and it TIMED_OUT three real CodeBuild runs
+    (process_tas, process_pr, process_extreme_heat_days) at the account's real ~45-minute cap.
+    Computing the per-year mean once, then slicing+averaging that much smaller array per window
+    (see run.py), cuts total raw-data touches by roughly the same ~20x this was costing.
+
+    Same eager-per-year-materialization shape as indices.py's functions, for the same reason:
+    xarray's lazy .groupby(...).mean() on a large dask array is a real, confirmed performance gap
+    (extreme_heat_days_per_year timed out with it; the eager version finished the same dataset in
+    under 8 minutes), not something to trust again just because it looks simpler.
+
+    One small, accepted approximation, not hidden: this means "mean of annual means," not "mean
+    of every raw day" — identical if every year has the same day count, and differs only by a
+    scientifically negligible amount otherwise (a leap-year-sized rounding effect, not a
+    meaningful one), the same order of approximation this project already accepts elsewhere.
+    """
+    data = dataset[variable]
+
+    def _mean_per_year(year_slice: xr.DataArray) -> xr.DataArray:
+        arr = year_slice.values  # forces this one year to materialize, not the whole dataset at once
+        means = arr.mean(axis=0)
+        return xr.DataArray(means, dims=year_slice.dims[1:], coords={d: year_slice.coords[d] for d in year_slice.dims[1:]})
+
+    return data.groupby(f"{time_dim}.year").map(_mean_per_year)
+
+
 def yield_grid_mean(
     dataset: xr.Dataset, variable: str, start_year: int, end_year: int, time_dim: str = "time"
 ) -> xr.DataArray:

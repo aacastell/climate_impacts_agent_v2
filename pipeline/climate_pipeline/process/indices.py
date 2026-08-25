@@ -57,10 +57,25 @@ def _pr_in_mm_per_day(data: xr.DataArray) -> xr.DataArray:
 
 
 def extreme_heat_days_per_year(dataset: xr.Dataset, variable: str = "tas") -> xr.DataArray:
-    """Per cell, per calendar year: count of days with tas > EXTREME_HEAT_THRESHOLD_C."""
+    """Per cell, per calendar year: count of days with tas > EXTREME_HEAT_THRESHOLD_C.
+
+    Real, confirmed-live finding this shape is built around: the original implementation used
+    `.groupby("time.year").sum(dim="time")` directly on a dask-backed array, staying fully lazy —
+    reasonable in theory, but it TIMED_OUT a real CodeBuild run at ~43 minutes (the account's real
+    cap), while consecutive_dry_days_per_year's eager, per-year `.map()` (forcing one year to
+    materialize at a time via `.values`, same pattern used here now) finished the same real
+    dataset in under 8 minutes despite consecutive_dry_days's own per-day Python loop being
+    individually more expensive per pass. xarray's lazy groupby-then-reduce on a large dask array
+    is a known real performance gap, not something to keep trusting because it looks simpler."""
     celsius = _tas_in_celsius(dataset[variable])
     is_hot = celsius > EXTREME_HEAT_THRESHOLD_C
-    return is_hot.groupby("time.year").sum(dim="time")
+
+    def _count_per_year(year_slice: xr.DataArray) -> xr.DataArray:
+        arr = year_slice.values  # (time, lat, lon) bool — forces this one year to materialize
+        counts = arr.sum(axis=0).astype("int32")
+        return xr.DataArray(counts, dims=year_slice.dims[1:], coords={d: year_slice.coords[d] for d in year_slice.dims[1:]})
+
+    return is_hot.groupby("time.year").map(_count_per_year)
 
 
 def consecutive_dry_days_per_year(dataset: xr.Dataset, variable: str = "pr") -> xr.DataArray:

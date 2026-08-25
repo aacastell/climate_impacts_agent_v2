@@ -5,6 +5,7 @@ import xarray as xr
 
 from climate_pipeline.process.extract import (
     absolute_change,
+    annual_mean_grid,
     area_weights,
     global_area_weighted_mean,
     grid_mean,
@@ -116,6 +117,23 @@ def test_grid_mean_returns_the_full_spatial_grid_not_a_scalar():
     assert grid.dims == ("lat", "lon")
     assert grid.shape == (2, 3)
     assert (grid == 2012.0).all()
+
+
+def test_annual_mean_grid_returns_one_grid_per_year():
+    ds = _climate_dataset()  # 3 lon x 2 lat x 6 years, value = calendar year everywhere
+    years = annual_mean_grid(ds, "tas")
+    assert set(years.coords["year"].values) == {2010, 2011, 2012, 2013, 2014, 2015}
+    assert (years.sel(year=2012) == 2012.0).all()
+
+
+def test_annual_mean_grid_windowed_matches_grid_mean_for_the_same_window():
+    # Real equivalence guard for run.py's tas/pr fix: computing the per-year mean once, then
+    # slicing+averaging that, must agree with the original direct grid_mean() over the same
+    # window — this is a performance fix, not meant to change the actual numbers.
+    ds = _climate_dataset()
+    direct = grid_mean(ds, "tas", 2011, 2013)
+    via_annual = annual_mean_grid(ds, "tas").sel(year=slice(2011, 2013)).mean(dim="year")
+    assert np.allclose(direct.values, via_annual.values)
 
 
 def test_yield_grid_mean_returns_the_full_spatial_grid():

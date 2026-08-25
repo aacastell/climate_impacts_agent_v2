@@ -42,6 +42,7 @@ from climate_pipeline.fetch.agriculture import CROPS
 from climate_pipeline.fetch.manifest import write_manifest
 from climate_pipeline.process.extract import (
     absolute_change,
+    annual_mean_grid,
     grid_mean,
     percent_change_grid,
     yield_grid_mean,
@@ -183,8 +184,14 @@ def _load_field_data(s3, bucket: str, field: str, baseline_manifest: dict, futur
     if field in ("tas", "pr"):
         baseline_ds = _open_climate_dataset(s3, bucket, baseline_manifest, work_dir)
         future_ds = _open_climate_dataset(s3, bucket, future_manifest, work_dir)
+        # Baseline is a single fixed window, computed once regardless — grid_mean() is fine here,
+        # nothing redundant about one call. The future side is what timed out three real
+        # CodeBuild runs (see annual_mean_grid's docstring): compute the per-year mean once, then
+        # each of the 67 window calls slices+averages that small array instead of re-reading the
+        # raw daily dataset from scratch every time.
         baseline_grid = grid_mean(baseline_ds, field, BASELINE_START_YEAR, BASELINE_END_YEAR)
-        return baseline_grid, lambda s, e: grid_mean(future_ds, field, s, e)
+        future_years = annual_mean_grid(future_ds, field)
+        return baseline_grid, lambda s, e: future_years.sel(year=slice(s, e)).mean(dim="year")
 
     if field == "consecutive_dry_days":
         baseline_ds = _open_climate_dataset(s3, bucket, baseline_manifest, work_dir)
