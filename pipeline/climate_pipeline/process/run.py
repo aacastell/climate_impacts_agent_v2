@@ -319,9 +319,11 @@ def main() -> None:
     # Written every run, skipped or not — DVC needs its declared outs to exist, and on a skip
     # they're identical to the last successful run's (that's the point of the fingerprint match).
     out_path = write_manifest(output, args.manifest_dir / "global_precompute_manifest.json")
-    gwl_table_path = write_manifest(
-        {"gwl_year_table": output["gwl_year_table"]}, args.manifest_dir / "gwl_year_table.json"
-    )
+    # Bare list, matching the S3 copy's shape exactly (not wrapped in {"gwl_year_table": [...]}) —
+    # ADR-005 calls for "the one compact object timecode() actually needs," and a bare array of
+    # {gwl_c, year} pairs is that, with no reason for local and S3 to disagree on the shape of
+    # what's meant to be the same artifact.
+    gwl_table_path = write_manifest(output["gwl_year_table"], args.manifest_dir / "gwl_year_table.json")
 
     if output["skipped"]:
         print(f"Skipped — wrote {out_path} and {gwl_table_path} from the last successful run, nothing new to upload.")

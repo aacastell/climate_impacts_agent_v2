@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 
 
-def write_manifest(manifest: dict, out_path: Path) -> Path:
+def write_manifest(manifest: dict | list, out_path: Path) -> Path:
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
     return out_path
