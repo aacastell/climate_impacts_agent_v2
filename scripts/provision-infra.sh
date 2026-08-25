@@ -29,7 +29,7 @@ echo "==> Provisioning/updating all AWS infrastructure"
 # Idempotent — a one-time per-account/region setup that cdk deploy depends
 # on. Safe to run every time; no-ops if already bootstrapped.
 npx aws-cdk bootstrap
-npx aws-cdk deploy --all --outputs-file outputs.json \
+npx aws-cdk deploy --all --require-approval never --outputs-file outputs.json \
   -c githubOwner="$GITHUB_OWNER" \
   -c githubRepo="$GITHUB_REPO"
 
