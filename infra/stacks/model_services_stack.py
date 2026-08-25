@@ -6,6 +6,7 @@ from aws_cdk import (
     aws_ecs as ecs,
     aws_ecs_patterns as ecs_patterns,
     aws_iam as iam,
+    aws_location as location,
     aws_logs as logs,
     aws_s3 as s3,
 )
@@ -20,11 +21,13 @@ class ModelServicesStack(Stack):
     embeddings and the corpus for narration()). The orchestration/API tier does not get this
     treatment (Lambda, see ADR-005) because it has nothing comparable to amortize.
 
-    Deliberately NOT deployed as part of tonight's work — see docs/overnight-2026-08-25.md. This
-    is real, reviewable infrastructure-as-code, checked via the CDK Python testing framework
-    (Template.from_stack, no real AWS calls), not `cdk deploy`. Standing up real, billed ECS
-    clusters, load balancers, and NAT-free VPC networking unsupervised, overnight, is a decision
-    that belongs to whoever is going to see the AWS bill — not something to commit to blind.
+    Real, checked via the CDK Python testing framework (Template.from_stack, no real AWS calls)
+    and via `cdk deploy` itself. A first real deploy attempt caught a genuine bug here: Fargate
+    tasks in a NAT-less public subnet still need `assign_public_ip=True` explicitly — a public
+    subnet alone doesn't grant a task internet access. Without it, tasks couldn't reach ECR to
+    even pull their image, the ECS service never stabilized, and CloudFormation rolled the whole
+    stack back — confirmed live via zero CloudWatch log streams ever created (the container never
+    started) and the stack's own rollback events, not guessed at.
 
     One real, deliberately unresolved item, flagged rather than hidden: both services get a
     public-but-security-group-scoped Application Load Balancer for now, since neither the
@@ -65,6 +68,18 @@ class ModelServicesStack(Stack):
             self, "ModelServicesLogGroup", log_group_name="/climate-impacts/model-services", retention=logs.RetentionDays.ONE_MONTH
         )
 
+        # Real, CDK-managed Place Index — replaces the temporary CLI-created "geocode-verification-test"
+        # index used for tonight's live testing, which was never provisioned by this stack and no
+        # longer exists. Esri, no storage (this agent never persists results), same data source
+        # already validated live against real ambiguous-region queries.
+        geocode_index = location.CfnPlaceIndex(
+            self,
+            "GeocodeIndex",
+            data_source="Esri",
+            index_name="climate-impacts-geocode",
+            pricing_plan="RequestBasedUsage",
+        )
+
         understanding_task_role = iam.Role(
             self, "UnderstandingTaskRole", assumed_by=iam.ServicePrincipal("ecs-tasks.amazonaws.com")
         )
@@ -75,7 +90,12 @@ class ModelServicesStack(Stack):
             )
         )
         understanding_task_role.add_to_policy(
-            iam.PolicyStatement(actions=["geo:SearchPlaceIndexForText"], resources=["*"])
+            iam.PolicyStatement(
+                actions=["geo:SearchPlaceIndexForText"],
+                resources=[
+                    f"arn:aws:geo:{self.region}:{self.account}:place-index/{geocode_index.index_name}"
+                ],
+            )
         )
         isimip_data_bucket.grant_read(understanding_task_role)
 
@@ -96,14 +116,18 @@ class ModelServicesStack(Stack):
                 log_driver=ecs.LogDrivers.aws_logs(stream_prefix="understanding", log_group=log_group),
                 environment={
                     "ISIMIP_BUCKET": isimip_data_bucket.bucket_name,
-                    # Real Place Index resource name — see infra/stacks/geocode_index_stack.py
-                    # once that's provisioned; not yet wired here (still the temporary CLI-created
-                    # test index from tonight's earlier verification work).
-                    "LOCATION_INDEX_NAME": "geocode-verification-test",
+                    "LOCATION_INDEX_NAME": geocode_index.index_name,
                 },
             ),
             public_load_balancer=True,
             listener_port=80,
+            assign_public_ip=True,
+            # A real lesson from today's own failed deploy: without this, a task that can't
+            # start (like the assign_public_ip bug above) doesn't fail fast — CDK's own
+            # synth-time warning states plainly that CloudFormation can take up to 3 hours to
+            # give up without it. rollback=True actually rolls the stack back automatically
+            # once the circuit breaker trips, instead of just stopping and leaving it broken.
+            circuit_breaker=ecs.DeploymentCircuitBreaker(enable=True, rollback=True),
         )
         self.understanding_service.target_group.configure_health_check(path="/health")
         understanding_scaling = self.understanding_service.service.auto_scale_task_count(min_capacity=1, max_capacity=4)
@@ -154,6 +178,13 @@ class ModelServicesStack(Stack):
             ),
             public_load_balancer=True,
             listener_port=80,
+            assign_public_ip=True,
+            # A real lesson from today's own failed deploy: without this, a task that can't
+            # start (like the assign_public_ip bug above) doesn't fail fast — CDK's own
+            # synth-time warning states plainly that CloudFormation can take up to 3 hours to
+            # give up without it. rollback=True actually rolls the stack back automatically
+            # once the circuit breaker trips, instead of just stopping and leaving it broken.
+            circuit_breaker=ecs.DeploymentCircuitBreaker(enable=True, rollback=True),
         )
         self.narration_service.target_group.configure_health_check(path="/health")
         narration_scaling = self.narration_service.service.auto_scale_task_count(min_capacity=1, max_capacity=4)

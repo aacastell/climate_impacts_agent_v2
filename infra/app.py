@@ -40,11 +40,35 @@ isimip_data = IsimipDataBucketStack(
     env=cdk.Environment(account=account, region=home_region),
 )
 
+# understanding() and narration()'s real ECS/Fargate infrastructure — see ModelServicesStack's
+# own docstring for why these two specifically get scalable, persistent compute (ADR-005).
+# Created before FrontendHostingStack (below) because that stack's /api/* CloudFront behavior
+# needs ApiStack's RestApi construct, which needs these services' ALB DNS names first.
+model_services = ModelServicesStack(
+    app,
+    "ClimateImpactsModelServices",
+    isimip_data_bucket=isimip_data.bucket,
+    env=cdk.Environment(account=account, region=home_region),
+)
+
+# The Lambda orchestration tier — ADR-005's resolved compute-topology decision. Points at
+# ModelServicesStack's real ALB DNS names, never hardcoded, so this stack has no implicit
+# assumption about where those services actually live.
+api = ApiStack(
+    app,
+    "ClimateImpactsApi",
+    isimip_data_bucket=isimip_data.bucket,
+    understanding_url=f"http://{model_services.understanding_service.load_balancer.load_balancer_dns_name}",
+    narration_url=f"http://{model_services.narration_service.load_balancer.load_balancer_dns_name}",
+    env=cdk.Environment(account=account, region=home_region),
+)
+
 hosting = FrontendHostingStack(
     app,
     "ClimateImpactsFrontendHosting",
     web_acl_arn=waf.web_acl_arn,
     processed_data_bucket=isimip_data.bucket,
+    api=api.api,
     env=cdk.Environment(account=account, region=home_region),
     cross_region_references=True,
 )
@@ -136,28 +160,5 @@ if github_owner and github_repo:
             github_repo=github_repo,
             env=cdk.Environment(account=account, region=home_region),
         )
-
-# understanding() and narration()'s real ECS/Fargate infrastructure — see
-# ModelServicesStack's own docstring for why these two specifically get scalable, persistent
-# compute (ADR-005) and why this is defined but deliberately not deployed as part of tonight's
-# unsupervised work.
-model_services = ModelServicesStack(
-    app,
-    "ClimateImpactsModelServices",
-    isimip_data_bucket=isimip_data.bucket,
-    env=cdk.Environment(account=account, region=home_region),
-)
-
-# The Lambda orchestration tier — ADR-005's resolved compute-topology decision. Points at
-# ModelServicesStack's real ALB DNS names, never hardcoded, so this stack has no implicit
-# assumption about where those services actually live.
-ApiStack(
-    app,
-    "ClimateImpactsApi",
-    isimip_data_bucket=isimip_data.bucket,
-    understanding_url=f"http://{model_services.understanding_service.load_balancer.load_balancer_dns_name}",
-    narration_url=f"http://{model_services.narration_service.load_balancer.load_balancer_dns_name}",
-    env=cdk.Environment(account=account, region=home_region),
-)
 
 app.synth()

@@ -1,8 +1,10 @@
 from aws_cdk import (
     CfnOutput,
     Duration,
+    RemovalPolicy,
     Stack,
     aws_apigateway as apigateway,
+    aws_dynamodb as dynamodb,
     aws_iam as iam,
     aws_lambda as lambda_,
     aws_s3 as s3,
@@ -18,9 +20,12 @@ class ApiStack(Stack):
     pointed at a different handler within it via CMD override — not two separate image builds for
     what's the same real dependency set.
 
-    Deliberately NOT deployed as part of tonight's work — same reasoning as ModelServicesStack.
     UNDERSTANDING_URL/NARRATION_URL point at those services' ALBs once ModelServicesStack is
     actually deployed; wired here as constructor args so this stack never hardcodes them.
+
+    self.api is exposed so FrontendHostingStack can add it as a CloudFront origin behind /api/*
+    on the same distribution the frontend is served from (see that stack) — same-origin per
+    ADR-001, no CORS needed.
     """
 
     def __init__(
@@ -52,10 +57,29 @@ class ApiStack(Stack):
         )
         isimip_data_bucket.grant_read(execution_role)
 
+        # ADR-005's "workflow is stateful, compute layer stays stateless" design for clarify()
+        # round-trips: a request needing clarification gets a query_id, its partial resolution
+        # state (understanding()'s trace, see orchestrator.py) is written here, and a follow-up
+        # request carrying query_id + the user's answer resumes it. PAY_PER_REQUEST, not
+        # provisioned — no fixed floor cost at rest, unlike the Redis candidate ADR-005 named but
+        # never committed to (see the ADR's own Revisit triggers). Session data, not durable
+        # business data — DESTROY is correct here, unlike the data buckets elsewhere in this
+        # project that are explicitly RETAIN.
+        session_table = dynamodb.Table(
+            self,
+            "ClarifySessionTable",
+            partition_key=dynamodb.Attribute(name="query_id", type=dynamodb.AttributeType.STRING),
+            billing_mode=dynamodb.BillingMode.PAY_PER_REQUEST,
+            time_to_live_attribute="expires_at",
+            removal_policy=RemovalPolicy.DESTROY,
+        )
+        session_table.grant_read_write_data(execution_role)
+
         common_env = {
             "ISIMIP_BUCKET": isimip_data_bucket.bucket_name,
             "UNDERSTANDING_URL": understanding_url,
             "NARRATION_URL": narration_url,
+            "SESSION_TABLE_NAME": session_table.table_name,
         }
 
         interpret_fn = lambda_.DockerImageFunction(
@@ -81,7 +105,15 @@ class ApiStack(Stack):
         )
 
         api = apigateway.RestApi(self, "ClimateImpactsApi", rest_api_name="ClimateImpactsApi")
-        api.root.add_resource("interpret").add_method("POST", apigateway.LambdaIntegration(interpret_fn))
-        api.root.add_resource("narrate").add_method("POST", apigateway.LambdaIntegration(narrate_fn))
+        # Routes nested under /api so they land at the exact same path CloudFront forwards them
+        # at — see FrontendHostingStack's /api/* behavior. CloudFront forwards the literal
+        # request path (it doesn't strip the /api prefix its path pattern matched on), so the
+        # real deployed API Gateway resource has to be /api/interpret, not /interpret, for the
+        # two to actually line up.
+        api_resource = api.root.add_resource("api")
+        api_resource.add_resource("interpret").add_method("POST", apigateway.LambdaIntegration(interpret_fn))
+        api_resource.add_resource("narrate").add_method("POST", apigateway.LambdaIntegration(narrate_fn))
+
+        self.api = api
 
         CfnOutput(self, "ApiUrl", value=api.url)

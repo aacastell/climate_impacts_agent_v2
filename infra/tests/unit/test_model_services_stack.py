@@ -33,6 +33,19 @@ def test_no_nat_gateway():
     assert not any(r["Type"] == "AWS::EC2::NatGateway" for r in resources.values())
 
 
+def test_both_services_assign_public_ip():
+    """Real regression guard for a real, live-caught deploy failure: a NAT-less public subnet
+    doesn't grant a Fargate task internet access on its own — without AssignPublicIp explicitly
+    ENABLED, tasks couldn't reach ECR to pull their image at all. The first real `cdk deploy`
+    rolled the whole stack back over exactly this (confirmed via zero CloudWatch log streams ever
+    created — the container never started, not a crash after starting)."""
+    resources = _template().to_json()["Resources"]
+    services = [r for r in resources.values() if r["Type"] == "AWS::ECS::Service"]
+    assert len(services) == 2
+    for service in services:
+        assert service["Properties"]["NetworkConfiguration"]["AwsvpcConfiguration"]["AssignPublicIp"] == "ENABLED"
+
+
 def test_understanding_task_role_can_call_bedrock_and_location():
     _template().has_resource_properties(
         "AWS::IAM::Policy",

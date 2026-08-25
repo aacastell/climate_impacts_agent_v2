@@ -1,6 +1,7 @@
 from aws_cdk import (
     CfnOutput,
     Stack,
+    aws_apigateway as apigateway,
     aws_cloudfront as cloudfront,
     aws_cloudfront_origins as origins,
     aws_s3 as s3,
@@ -52,6 +53,7 @@ class FrontendHostingStack(Stack):
         construct_id: str,
         web_acl_arn: str,
         processed_data_bucket: s3.IBucket,
+        api: apigateway.RestApi,
         **kwargs,
     ) -> None:
         super().__init__(scope, construct_id, **kwargs)
@@ -129,6 +131,26 @@ class FrontendHostingStack(Stack):
             origins.S3BucketOrigin.with_origin_access_control(imported_processed_data_bucket),
             viewer_protocol_policy=cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
             cache_policy=cloudfront.CachePolicy.CACHING_OPTIMIZED,
+        )
+
+        # The real API tier (see ApiStack), same distribution, path-scoped — per ADR-001,
+        # frontend and API share one origin/domain rather than the frontend calling a separate
+        # API Gateway domain directly. That's what lets frontend/src/api/httpClient.ts call a
+        # plain relative path (/api/query, or whatever the real routes end up being) with no CORS
+        # configuration anywhere: same-origin requests never trigger a CORS preflight.
+        # CACHING_DISABLED, not CACHING_OPTIMIZED: these are POST calls into a real backend, never
+        # cacheable content. ALL_VIEWER_EXCEPT_HOST_HEADER forwards the POST body, headers, and
+        # query strings through to API Gateway — the default origin request policy forwards none
+        # of that, which would silently drop every request body. The Host header specifically has
+        # to be excluded: forwarding CloudFront's own Host would break API Gateway's own routing,
+        # which expects its own execute-api Host.
+        distribution.add_behavior(
+            "/api/*",
+            origins.RestApiOrigin(api),
+            viewer_protocol_policy=cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+            allowed_methods=cloudfront.AllowedMethods.ALLOW_ALL,
+            cache_policy=cloudfront.CachePolicy.CACHING_DISABLED,
+            origin_request_policy=cloudfront.OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER,
         )
 
         self.bucket = bucket
