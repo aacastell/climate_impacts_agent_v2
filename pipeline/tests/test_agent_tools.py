@@ -1,4 +1,6 @@
-from climate_pipeline.agent.tools import geocode
+import pytest
+
+from climate_pipeline.agent.tools import crop, geocode, timecode
 
 # Real response shapes captured this session against Amazon Location Service (Esri-backed),
 # not invented — see tools.py's module docstring. Mekong Delta's real response demonstrates
@@ -99,3 +101,27 @@ def test_geocode_handles_a_single_clean_result():
     candidates = geocode(client, "test-index", "Ganges Delta")
     assert len(candidates) == 1
     assert candidates[0]["supplemental_categories"] == ["Delta"]
+
+
+def test_crop_matches_synonyms():
+    assert crop("How will corn do?") == "maize"
+    assert crop("What about soybeans?") == "soy"
+
+
+def test_crop_prefers_spring_wheat_over_bare_wheat():
+    assert crop("spring wheat yields") == "spring_wheat"
+
+
+def test_crop_returns_none_for_an_unsupported_crop():
+    assert crop("How will barley do?") is None
+
+
+def test_timecode_finds_the_closest_table_entry():
+    table = [{"gwl_c": 1.5, "year": 2030}, {"gwl_c": 2.1, "year": 2045}, {"gwl_c": 3.0, "year": 2060}]
+    assert timecode(table, 2.0) == 2045
+    assert timecode(table, 1.4) == 2030
+
+
+def test_timecode_raises_on_an_empty_table():
+    with pytest.raises(ValueError, match="empty"):
+        timecode([], 2.0)
