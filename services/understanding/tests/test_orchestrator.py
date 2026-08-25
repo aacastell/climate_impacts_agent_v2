@@ -85,8 +85,46 @@ def test_interpret_returns_clarify_without_calling_more_tools():
 
     result = interpret(model_client, _FakeLocationClient({"Results": []}), "test-index", GWL_YEAR_TABLE, "What about Mekong?")
 
-    assert result == {"kind": "clarify", "question": "Did you mean the Vietnamese Mekong Delta?"}
+    assert result == {
+        "kind": "clarify",
+        "question": "Did you mean the Vietnamese Mekong Delta?",
+        "tool_use_id": "t1",
+    }
     assert len(model_client.calls) == 1
+
+
+def test_interpret_resumes_a_clarify_round_trip_from_a_stored_trace():
+    # Real regression guard for the query_id/short-lived-store design ADR-005 names — a resumed
+    # call must NOT re-add the original question (it's already in the stored trace) and the
+    # caller's appended toolResult for the pending clarify call must reach the model as the very
+    # next turn, per Bedrock's real toolUse/toolResult pairing requirement.
+    stored_trace = [
+        {"role": "user", "content": [{"text": "What about Mekong?"}]},
+        _tool_use_message("clarify", "t1", {"question": "Did you mean the Vietnamese Mekong Delta?"}),
+        # The caller (api/interpret_handler.py in production) appends this before resuming —
+        # the user's clarifying answer, shaped as the toolResult for the pending clarify call.
+        {"role": "user", "content": [{"toolResult": {"toolUseId": "t1", "content": [{"text": "Yes, the Vietnamese one."}]}}]},
+    ]
+    scripted = [
+        _tool_use_message("geocode", "t2", {"region_text": "Mekong Delta, Vietnam"}),
+        {"role": "assistant", "content": [{"text": "still thinking"}]},
+    ]
+    model_client = _ScriptedModelClient(scripted)
+    location_client = _FakeLocationClient({"Results": [{"Place": {"Label": "Mekong Delta, VNM", "Geometry": {"Point": [106.6, 10.3]}}, "Relevance": 1.0}]})
+    # trace is mutated in place by interpret() (it IS `messages`) — snapshot before calling,
+    # since comparing against stored_trace afterward would compare against its own final state.
+    expected_first_call = list(stored_trace)
+
+    result = interpret(
+        model_client, location_client, "test-index", GWL_YEAR_TABLE,
+        "this question is ignored on resume", trace=stored_trace,
+    )
+
+    # The model's very first call on resume sees the full stored history, unmodified — no
+    # duplicate question re-appended.
+    first_call_messages = model_client.calls[0]["messages"]
+    assert first_call_messages == expected_first_call
+    assert result["kind"] == "refusal"  # scripted response doesn't reach a resolution; irrelevant to what this test checks
 
 
 def test_interpret_refuses_when_model_never_reaches_a_resolution():

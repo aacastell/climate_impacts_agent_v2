@@ -151,14 +151,34 @@ def _run_tool(name: str, tool_input: dict, location_client, location_index_name:
 
 @observe(name="understanding:interpret", as_type="agent")
 def interpret(
-    model_client, location_client, location_index_name: str, gwl_year_table: list[dict], question: str
+    model_client,
+    location_client,
+    location_index_name: str,
+    gwl_year_table: list[dict],
+    question: str,
+    *,
+    trace: list | None = None,
 ) -> dict:
     """Runs the real tool-calling loop. Returns one of:
     {"kind": "resolved", "region": {...}, "crop": ..., "warmingLevelC": ..., "year": ...}
-    {"kind": "clarify", "question": ...}
+    {"kind": "clarify", "question": ..., "tool_use_id": ...}
     {"kind": "refusal", "reason": "no_resolution", "message": ...}
+
+    trace: two jobs. If given empty (or None), the exact real message list (question, tool
+    calls, tool results, final turn) is built into it in place — the hook fine-tuning data
+    generation needs, so training examples come from this real loop rather than a second,
+    drift-prone copy of it. If given non-empty, this call *resumes* a prior conversation instead
+    of starting one — `question` is then ignored, since the original question is already the
+    first entry in `trace`. Resuming a clarify() round-trip means the caller must have already
+    appended the user's answer as a toolResult for the pending clarify call's tool_use_id (see
+    ADR-005's Accompanying decisions — the query_id/short-lived-store design this supports) —
+    Bedrock's Converse API requires every toolUse to be paired with a toolResult in the very next
+    turn before the conversation can continue at all; a plain follow-up message wouldn't be a
+    valid resume.
     """
-    messages = [{"role": "user", "content": [{"text": question}]}]
+    messages = trace if trace is not None else []
+    if not messages:
+        messages.append({"role": "user", "content": [{"text": question}]})
 
     for _ in range(MAX_TURNS):
         output_message = model_client.resolve_tool_call(messages, TOOLS, SYSTEM_PROMPT)
@@ -174,7 +194,7 @@ def interpret(
             tool_input = tool_use["input"]
 
             if name == "clarify":
-                return {"kind": "clarify", "question": tool_input["question"]}
+                return {"kind": "clarify", "question": tool_input["question"], "tool_use_id": tool_use["toolUseId"]}
 
             if name == "resolved":
                 return {

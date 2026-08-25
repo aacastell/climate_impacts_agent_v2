@@ -48,12 +48,21 @@ def _load_gwl_year_table() -> list[dict]:
 
 class InterpretRequest(BaseModel):
     question: str
+    # Non-empty only on a clarify()-resume call — the caller (api/interpret_handler.py) is
+    # responsible for retrieving this from its own short-lived session store and appending the
+    # user's answer as the pending clarify call's toolResult before sending it back here. See
+    # orchestrator.interpret()'s docstring and ADR-005's query_id/session-store design.
+    trace: list | None = None
 
 
 @app.post("/interpret")
 def interpret_endpoint(request: InterpretRequest) -> dict:
     gwl_year_table = _load_gwl_year_table()
-    return interpret(_model_client, _location, LOCATION_INDEX_NAME, gwl_year_table, request.question)
+    trace = request.trace if request.trace is not None else []
+    result = interpret(_model_client, _location, LOCATION_INDEX_NAME, gwl_year_table, request.question, trace=trace)
+    # Always returned, not just on clarify — simpler contract than a conditional response shape,
+    # and the caller only needs to act on it when result["kind"] == "clarify" anyway.
+    return {**result, "trace": trace}
 
 
 @app.get("/health")
