@@ -1,10 +1,41 @@
 # ADR-004: Map Data Delivery
 
-**Status:** Accepted
+**Status:** Accepted, with Steps 2-3's specific tile-pyramid mechanism superseded — see
+**Update (2026-08-26)** below. The core decision this ADR makes (the query API never computes or
+extracts shading values; it only tells the frontend which precomputed data to load) is still the
+real, live architecture.
 **Depends on:** ADR-001 (static delivery via S3 + CloudFront)
 **Scope:** How map shading data (climate indicators, sector/crop outputs) reaches the frontend,
 and how that interacts with the query API. Does not cover the API tier's own architecture,
 compute, or language — that remains open (see repo root README "Status" table).
+
+---
+
+## Update (2026-08-26): Steps 2-3's tile-pyramid mechanism, superseded
+
+**Real, acknowledged drift, not a deliberate re-design at the time it happened:** for a stretch
+of this project, `interpret_handler.py` quietly started computing and returning scalar values and
+grid shading server-side — a direct contradiction of this ADR's core decision. That was caught,
+discussed, and the core decision (query API returns identifiers only) was restored for real. But
+restoring it exposed that Steps 2-3's specific *mechanism* — a zoom-tiled pyramid in a dedicated
+tile format, bounding transfer cost by screen area — no longer fits the real shape of the data.
+
+Step 2's own reasoning was that transfer cost needed bounding because "regions range from a town
+to a subcontinent." That reasoning predates the actual precompute design that got built later
+(see ADR-006 and the process-stage rebuild): each field-window is stored as one small (~1MB)
+*whole-global* file, not a slice sized to the query's region. A town query and a subcontinent
+query already fetch the same ~1MB object either way — there's no region-size-driven transfer cost
+left for a tile pyramid to bound.
+
+**What's actually live instead:** the frontend fetches the precomputed file directly —
+`processed/global/{outputField}/y{year}.nc` — from the existing `/processed/*` CloudFront
+behavior (the "separate bucket, second origin, path-scoped" part of Step 3 *is* still exactly
+what's live) and parses it client-side with h5wasm (a real WebAssembly HDF5 build — these files
+are real HDF5/NetCDF4, confirmed via h5py, not classic NetCDF3). See
+`frontend/src/precomputedFetch.ts` and `infra/stacks/frontend_hosting_stack.py`'s `/processed/*`
+behavior. No tile format, no zoom levels, no new precompute stage — genuinely less mechanism than
+this ADR originally called for, because the problem the mechanism was built to solve turned out
+not to exist at the data sizes this project actually produced.
 
 ---
 

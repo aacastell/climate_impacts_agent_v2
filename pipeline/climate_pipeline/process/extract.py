@@ -74,22 +74,11 @@ def absolute_change(future_mean: float, baseline_mean: float) -> float:
     return future_mean - baseline_mean
 
 
-def percent_change(future_mean: float, baseline_mean: float) -> float:
-    """Percent change from baseline — e.g. precipitation, yield. A zero baseline has no
-    meaningful percent change; callers should treat that as a data problem, not silently divide
-    by it. Scalar only — `baseline_mean == 0` on an array gives an array of booleans, not a
-    single truth value, so this raises TypeError-adjacent confusion if handed a grid; use
-    percent_change_grid for that instead."""
-    if baseline_mean == 0:
-        raise ValueError("Cannot compute percent change from a zero baseline")
-    return (future_mean - baseline_mean) / baseline_mean * 100
-
-
 def percent_change_grid(future_grid: xr.DataArray, baseline_grid: xr.DataArray) -> xr.DataArray:
-    """Grid-wide percent change from baseline. Unlike the scalar percent_change, a zero-baseline
-    cell doesn't raise — a global grid legitimately has cells with no meaningful baseline (ocean,
-    non-arable land for yield), and one such cell shouldn't crash the whole computation. Those
-    cells become NaN, not a fabricated number and not a crash."""
+    """Grid-wide percent change from baseline. A zero-baseline cell doesn't raise — a global grid
+    legitimately has cells with no meaningful baseline (ocean, non-arable land for yield), and
+    one such cell shouldn't crash the whole computation. Those cells become NaN, not a fabricated
+    number and not a crash."""
     return xr.where(baseline_grid != 0, (future_grid - baseline_grid) / baseline_grid * 100, np.nan)
 
 

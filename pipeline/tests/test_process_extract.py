@@ -12,7 +12,6 @@ from climate_pipeline.process.extract import (
     grid_mean,
     nearest_point_mean,
     nearest_point_yield_mean,
-    percent_change,
     percent_change_grid,
     yield_grid_mean,
     yield_season_start_year,
@@ -81,15 +80,6 @@ def test_nearest_point_yield_mean_converts_season_index_to_calendar_years():
 
 def test_absolute_change_is_a_plain_difference():
     assert absolute_change(future_mean=15.0, baseline_mean=13.0) == 2.0
-
-
-def test_percent_change_computes_relative_difference():
-    assert percent_change(future_mean=110.0, baseline_mean=100.0) == 10.0
-
-
-def test_percent_change_raises_on_zero_baseline():
-    with pytest.raises(ValueError):
-        percent_change(future_mean=5.0, baseline_mean=0.0)
 
 
 def test_area_weights_are_larger_near_the_equator_than_poles():

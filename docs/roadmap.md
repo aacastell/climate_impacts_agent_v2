@@ -1,5 +1,10 @@
 # Roadmap
 
+**Status (2026-08-26): Phases 1-4 are built, deployed, and live** — this document is kept as a
+historical planning record, not current open work. Phase 5's items are cross-cutting and get
+picked up individually as real; see `docs/overnight-2026-08-25.md` and git history for what
+actually shipped and when, rather than treating anything below as still pending.
+
 What's left after the offline scientific data pipeline (ADR-006), ordered by real dependency —
 each phase is blocked on the one before it, except Phase 5, which runs alongside any of them.
 
@@ -70,8 +75,9 @@ pre-committed now.
 ## Phase 4 — Frontend rewire
 
 **Scope:** replace `mockClient.ts` with real `interpret`/`narrate` calls (ADR-004's split);
-retire `precomputedClient.ts`'s defunct 5-region shape; build actual map shading (raw values from
-the precomputed grid, client-side color scale — MapLibre's `image` source, no server-side
+retire `precomputedClient.ts`'s defunct 5-region shape (done — see ADR-004's own 2026-08-26
+update); build actual map shading (raw values from the precomputed grid, client-side color scale
+— done, via a MapLibre GeoJSON fill layer rather than an `image` source, no server-side
 reprojection needed).
 
 **Builds on:** Phase 1 alone is enough for `interpret` (map rendering, no narration text) to work;
