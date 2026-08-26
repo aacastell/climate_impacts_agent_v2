@@ -26,7 +26,7 @@ import uuid
 import httpx
 
 from climate_pipeline.process.run import CROP_FIELDS
-from climate_pipeline.query.lookup import lookup_value
+from climate_pipeline.query.lookup import lookup_grid, lookup_value
 
 UNDERSTANDING_URL = os.environ.get("UNDERSTANDING_URL", "http://localhost:8000")
 SESSION_TTL_SECONDS = 900  # 15 minutes — long enough for a real user to read and answer a clarifying question, short enough that DynamoDB's own TTL sweep clears stale sessions without any code here having to run a cleanup job.
@@ -72,6 +72,29 @@ def _indicator_value(s3, bucket: str, base_field: str, kind: str, year: int, lon
     if base_field == "pr" and kind == "absolute":
         value *= _KG_M2_S1_TO_MM_PER_DAY
     return value
+
+
+# Real regional shading, not decoration: the frontend used to render a single colored dot
+# regardless of what "region" meant, even though the precomputed store has always held a full
+# global grid per field (see pipeline/climate_pipeline/query/lookup.py's grid_patch — the whole
+# small object lookup_value already downloads, just read more of it). RADIUS_DEG=2.0 is a
+# real-world-meaningful box (≈220km at the equator, real ISIMIP 0.5° cells), not an arbitrary
+# pixel count — kept small deliberately so the response payload stays small (see
+# _indicator_grid's own docstring).
+_GRID_RADIUS_DEG = 2.0
+
+
+def _indicator_grid(s3, bucket: str, base_field: str, kind: str, year: int, lon: float, lat: float, work_dir) -> dict:
+    """Same real precomputed data _indicator_value reads, as a small spatial patch instead of one
+    scalar — same unit conversion, same convert-then-round order as the scalar path (see
+    grid_patch's own docstring for why the order matters), so the map's shading and its own
+    labeled value are never in different units or subtly different numbers from rounding twice."""
+    grid = lookup_grid(s3, bucket, base_field, kind, year, lon, lat, work_dir, radius_deg=_GRID_RADIUS_DEG)
+    convert = (lambda v: v * _KG_M2_S1_TO_MM_PER_DAY) if (base_field == "pr" and kind == "absolute") else (lambda v: v)
+    return {
+        **grid,
+        "values": [[None if v is None else round(convert(v), 4) for v in row] for row in grid["values"]],
+    }
 
 
 def interpret(s3, bucket: str, work_dir, http_client, question: str, *, session_table=None, query_id: str | None = None, answer: str | None = None) -> dict:
@@ -142,10 +165,12 @@ def interpret(s3, bucket: str, work_dir, http_client, question: str, *, session_
             "title": f"{indicator_id} at {warming_level_c}°C global warming",
             "unit": unit,
             "value": round(_indicator_value(s3, bucket, base_field, field_kind, year, lon, lat, work_dir), 4),
+            "grid": _indicator_grid(s3, bucket, base_field, field_kind, year, lon, lat, work_dir),
         }
         for indicator_id, base_field, field_kind, unit in _CLIMATE_INDICATORS
     ]
     yield_change_pct = round(_indicator_value(s3, bucket, crop_key, "percent", year, lon, lat, work_dir), 2)
+    yield_grid = _indicator_grid(s3, bucket, crop_key, "percent", year, lon, lat, work_dir)
 
     return {
         "kind": "answer",
@@ -162,6 +187,7 @@ def interpret(s3, bucket: str, work_dir, http_client, question: str, *, session_
             "title": f"{crop_key} yield change at {warming_level_c}°C global warming",
             "unit": "% yield change",
             "value": yield_change_pct,
+            "grid": yield_grid,
             "center": {"lon": lon, "lat": lat},
             "zoom": 5,
         },

@@ -123,6 +123,15 @@ def test_interpret_returns_full_answer_when_understanding_resolves(tmp_path):
     assert indicators["temp_change"]["value"] == 1.8
     assert indicators["precip_change_abs"]["value"] == round(2e-5 * 86400, 4)
 
+    # Real regional shading data, not just the single scalar — see
+    # pipeline/climate_pipeline/query/lookup.py's grid_patch. The fixture's own two cells are
+    # ~187°/84° apart, well outside the default 2° radius, so only the resolved cell itself
+    # falls in the box — still a real, non-degenerate grid shape, and the same unit conversion
+    # as the scalar (mm/day, not the raw per-second flux) applies to the grid too.
+    assert indicators["temp_change"]["grid"]["values"] == [[1.8]]
+    assert indicators["precip_change_abs"]["grid"]["values"] == [[round(2e-5 * 86400, 4)]]
+    assert result["sectorMap"]["grid"]["values"] == [[-12.3]]
+
 
 def test_interpret_starts_a_session_on_clarify_and_returns_a_query_id():
     # Real regression guard: a real trace (e.g. a geocode() candidate already seen this turn)

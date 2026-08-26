@@ -14,6 +14,7 @@ at all (see process/run.py's _write_field_window), so no windowing/time logic is
 query time, only a plain nearest-cell read.
 """
 
+import math
 from pathlib import Path
 
 import xarray as xr
@@ -60,3 +61,47 @@ def lookup_value(s3, bucket: str, base_field: str, kind: str, year: int, lon: fl
         raise ValueError(f"{base_field!r} has no {kind!r} variant — valid kinds: {FIELD_VARIANTS[base_field]}")
     path = download_field_window(s3, bucket, base_field, kind, year, work_dir)
     return nearest_cell_value(path, base_field, kind, lon, lat)
+
+
+def grid_patch(path: Path, base_field: str, kind: str, lon: float, lat: float, radius_deg: float = 2.0) -> dict:
+    """A small neighborhood of real precomputed cells around (lon, lat) — real regional shading,
+    not decoration. The file this reads from is already the *entire* global grid
+    (download_field_window fetches the whole small object, see process/run.py's
+    _write_field_window), so this is a local read against data already on disk, not a second S3
+    call — the same file nearest_cell_value already reads, just more of it.
+
+    Returns {"lons": [...], "lats": [...], "values": [[...], ...]}, values[i][j] at
+    (lats[i], lons[j]). A cell with no real data (ocean, or land the source dataset itself masks
+    out) becomes None, not a fabricated 0 or an interpolated guess — the frontend's job is to skip
+    rendering those cells, not paper over a real gap in the data.
+
+    Deliberately unrounded, matching nearest_cell_value/lookup_value's own convention — rounding
+    is a presentation-layer decision (see api/interpret_handler.py's own round(..., 4) calls),
+    made *after* any unit conversion a caller applies (e.g. pr's kg/m^2/s1 -> mm/day), not before.
+    Rounding here first would round the raw flux, then a caller's unit conversion would multiply
+    an already-rounded number — a real, silent precision bug, not a style preference.
+    """
+    output_field = output_field_name(base_field, kind)
+    with xr.open_dataset(path) as ds:
+        da = ds[output_field]
+        # A box selection, not a fixed cell count: real ISIMIP resolution (0.5°) means this
+        # returns a different cell count near the poles' cos(lat) grid distortion than at the
+        # equator, which is correct — it's a real spatial box, not a hardcoded NxN window.
+        box = (abs(da["lon"] - lon) <= radius_deg) & (abs(da["lat"] - lat) <= radius_deg)
+        patch = da.where(box, drop=True)
+        lons = [float(x) for x in patch["lon"].values]
+        lats = [float(x) for x in patch["lat"].values]
+        values = [
+            [None if math.isnan(v) else float(v) for v in row]
+            for row in patch.values
+        ]
+    return {"lons": lons, "lats": lats, "values": values}
+
+
+def lookup_grid(s3, bucket: str, base_field: str, kind: str, year: int, lon: float, lat: float, work_dir: Path, radius_deg: float = 2.0) -> dict:
+    """grid_patch's own S3-backed counterpart to lookup_value — same download-and-cache path,
+    same (field, kind, year, region point) inputs, a real spatial patch instead of one scalar."""
+    if kind not in FIELD_VARIANTS[base_field]:
+        raise ValueError(f"{base_field!r} has no {kind!r} variant — valid kinds: {FIELD_VARIANTS[base_field]}")
+    path = download_field_window(s3, bucket, base_field, kind, year, work_dir)
+    return grid_patch(path, base_field, kind, lon, lat, radius_deg=radius_deg)

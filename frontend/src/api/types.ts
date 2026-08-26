@@ -53,6 +53,17 @@ export type ClimateIndicatorId =
   | "consecutive_dry_days"
   | "extreme_heat_days";
 
+// A real neighborhood of precomputed cells around the resolved point (see
+// pipeline/climate_pipeline/query/lookup.py's grid_patch) — this is what lets ResultMap render
+// real regional shading instead of a single colored dot. values[i][j] is the cell at
+// (lats[i], lons[j]); null means no real data at that cell (ocean, or land the source dataset
+// itself masks out), never a fabricated/interpolated number.
+export interface GridPatch {
+  lons: number[];
+  lats: number[];
+  values: (number | null)[][];
+}
+
 // Single climate model (GFDL-ESM4) — a single value per indicator, never a
 // range. Framing this as a range or interval would fabricate an uncertainty
 // estimate the data doesn't support.
@@ -61,6 +72,10 @@ export interface ClimateIndicatorPayload {
   title: string;
   unit: string;
   value: number;
+  // Optional: only the real backend (api/interpret_handler.py) populates this — MockApiClient
+  // and PrecomputedApiClient predate real regional shading and stay marker-only rather than
+  // fabricate a synthetic grid just to satisfy this field.
+  grid?: GridPatch;
 }
 
 export interface ClimateMapPayload {
@@ -79,6 +94,7 @@ export interface SectorMapPayload {
   title: string;
   unit: string;
   value: number;
+  grid?: GridPatch;
   center: MapCenter;
   zoom: number;
 }

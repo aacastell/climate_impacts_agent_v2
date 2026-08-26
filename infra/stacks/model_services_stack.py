@@ -62,6 +62,17 @@ class ModelServicesStack(Stack):
         # files already default to it, so removing this override is the entire revert.
         _TEMPORARY_MODEL_ID = "us.amazon.nova-pro-v1:0"
 
+        # Real bug caught live: the langfuse SDK (v4, confirmed against the actual installed
+        # version's source — `os.environ.get(LANGFUSE_BASE_URL) or os.environ.get(LANGFUSE_HOST,
+        # "https://cloud.langfuse.com")`) defaults to Langfuse Cloud's EU region host. This
+        # project's real Langfuse Cloud project is in the US region — confirmed by the account
+        # owner checking the dashboard URL (us.cloud.langfuse.com) — so a real key pair from that
+        # project 401s against the EU default with zero code hint why (traces are actually being
+        # sent, just to the wrong region's auth backend; see CloudWatch: "Failed to export span
+        # batch code: 401, reason: Unauthorized"). Without this, real keys in Secrets Manager
+        # would silently keep failing forever.
+        _LANGFUSE_BASE_URL = "https://us.cloud.langfuse.com"
+
         # Real Secrets Manager secret, not a plain environment variable — a Langfuse secret key
         # belongs here, not baked in plaintext into the CloudFormation template the way a plain
         # `environment={}` value would be. Starts with empty placeholder values: this stack
@@ -163,6 +174,7 @@ class ModelServicesStack(Stack):
                     "ISIMIP_BUCKET": isimip_data_bucket.bucket_name,
                     "LOCATION_INDEX_NAME": geocode_index.index_name,
                     "UNDERSTANDING_MODEL_ID": _TEMPORARY_MODEL_ID,
+                    "LANGFUSE_BASE_URL": _LANGFUSE_BASE_URL,
                 },
                 # Real Langfuse wiring, not yet real Langfuse tracing — the langfuse Python SDK
                 # already reads these two env var names on its own (see services/understanding/
@@ -310,6 +322,7 @@ class ModelServicesStack(Stack):
                 log_driver=ecs.LogDrivers.aws_logs(stream_prefix="narration", log_group=log_group),
                 environment={
                     "NARRATION_MODEL_ID": _TEMPORARY_MODEL_ID,
+                    "LANGFUSE_BASE_URL": _LANGFUSE_BASE_URL,
                     # Points at the real, self-hosted MLflow server above (MlflowService) — an
                     # http:// tracking URI, not a local sqlite path. mlflow's client library
                     # talks to a real tracking server over its REST API when given one, same

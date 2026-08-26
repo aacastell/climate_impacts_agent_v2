@@ -147,6 +147,7 @@ function App() {
               zoom={answer.climateMap.zoom}
               intensity={indicatorIntensity(selectedIndicator)}
               valueLabel={formatSigned(selectedIndicator.value, selectedIndicator.unit)}
+              grid={selectedIndicator.grid}
               toggle={
                 <IndicatorToggle
                   indicators={answer.climateMap.indicators}
@@ -161,6 +162,7 @@ function App() {
               zoom={answer.sectorMap.zoom}
               intensity={Math.abs(answer.sectorMap.value) / SECTOR_INTENSITY_SCALE}
               valueLabel={formatSigned(answer.sectorMap.value, answer.sectorMap.unit)}
+              grid={answer.sectorMap.grid}
             />
           </div>
 

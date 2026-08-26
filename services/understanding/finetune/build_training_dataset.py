@@ -28,7 +28,13 @@ import json
 import sys
 from pathlib import Path
 
+# Both paths, matching run_baseline_eval.py's own real, working sys.path setup exactly —
+# orchestrator.py imports climate_pipeline.agent.tools, so services/understanding alone isn't
+# enough (a real bug caught live: the earlier version of this file only added the first path and
+# failed with ModuleNotFoundError the moment this ran for real against the real package layout,
+# not a stubbed-imports check that bypassed the real import chain).
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent.parent / "pipeline"))
 from orchestrator import SYSTEM_PROMPT  # noqa: E402
 
 DEFAULT_EVAL_RUNS_DIR = Path(__file__).parent / "eval_runs"

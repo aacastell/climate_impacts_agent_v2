@@ -189,6 +189,24 @@ def test_drift_check_lambda_targets_the_real_mlflow_and_place_index():
     assert isinstance(env["MLFLOW_TRACKING_URI"], dict), "expected a CDK token pointing at the real MlflowService, not a literal string"
 
 
+def test_understanding_and_narration_point_langfuse_at_the_real_us_region_host():
+    # Real bug caught live: the langfuse SDK defaults to Langfuse Cloud's EU region
+    # (cloud.langfuse.com) unless LANGFUSE_BASE_URL/LANGFUSE_HOST says otherwise — this
+    # project's real Langfuse Cloud project is in the US region, confirmed by the account owner
+    # checking their dashboard URL. Real keys against the wrong region's host 401 silently (see
+    # CloudWatch: "Failed to export span batch code: 401, reason: Unauthorized") with nothing in
+    # the app code to hint why.
+    resources = _template().to_json()["Resources"]
+    task_defs = [
+        r for key, r in resources.items()
+        if r["Type"] == "AWS::ECS::TaskDefinition" and (key.startswith("UnderstandingService") or key.startswith("NarrationService"))
+    ]
+    assert len(task_defs) == 2
+    for task_def in task_defs:
+        env = {e["Name"]: e["Value"] for e in task_def["Properties"]["ContainerDefinitions"][0]["Environment"]}
+        assert env.get("LANGFUSE_BASE_URL") == "https://us.cloud.langfuse.com"
+
+
 def test_bedrock_finetune_role_trusts_bedrock_scoped_to_the_real_finetune_region():
     # Real regression guard: Nova Pro's FINE_TUNING support (confirmed live via `aws bedrock
     # list-foundation-models`) only exists in us-east-1, not this stack's own home region
