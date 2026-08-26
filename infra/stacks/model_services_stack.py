@@ -8,7 +8,10 @@ from aws_cdk import (
     aws_ecs as ecs,
     aws_ecs_patterns as ecs_patterns,
     aws_efs as efs,
+    aws_events as events,
+    aws_events_targets as targets,
     aws_iam as iam,
+    aws_lambda as lambda_,
     aws_location as location,
     aws_logs as logs,
     aws_s3 as s3,
@@ -356,7 +359,94 @@ class ModelServicesStack(Stack):
             scale_out_cooldown=Duration.seconds(30),
         )
 
+        # Real, scheduled drift monitoring — services/understanding/finetune/check_drift.py
+        # already implements the actual statistical check (a two-proportion z-test against a
+        # stored baseline); this is the infra that makes it run on its own instead of depending
+        # on someone remembering to invoke it by hand. Monthly, not weekly or daily: the eval set
+        # is small (n=25) and the check's own docstring is explicit that repeated significance
+        # testing inflates the true false-positive rate past the nominal alpha — a defensible,
+        # deliberately conservative cadence, not a placeholder value.
+        drift_check_role = iam.Role(self, "DriftCheckRole", assumed_by=iam.ServicePrincipal("lambda.amazonaws.com"))
+        drift_check_role.add_managed_policy(
+            iam.ManagedPolicy.from_aws_managed_policy_name("service-role/AWSLambdaBasicExecutionRole")
+        )
+        drift_check_role.add_to_policy(
+            iam.PolicyStatement(
+                actions=["bedrock:InvokeModel", "bedrock:Converse", "bedrock:ConverseStream"],
+                resources=["*"],
+            )
+        )
+        drift_check_role.add_to_policy(
+            iam.PolicyStatement(
+                actions=["geo:SearchPlaceIndexForText"],
+                resources=[f"arn:aws:geo:{self.region}:{self.account}:place-index/{geocode_index.index_name}"],
+            )
+        )
+        # Read (gwl_year_table.json, the existing baseline) and write (a new baseline, on
+        # bootstrap or --set-baseline) both needed — see check_drift.py's own _load_baseline/
+        # _write_baseline.
+        isimip_data_bucket.grant_read_write(drift_check_role, "eval/*")
+        isimip_data_bucket.grant_read(drift_check_role, "processed/global/gwl_year_table.json")
+
+        drift_check_fn = lambda_.DockerImageFunction(
+            self,
+            "DriftCheckFunction",
+            code=lambda_.DockerImageCode.from_image_asset(
+                directory="..", file="services/understanding/finetune/Dockerfile"
+            ),
+            role=drift_check_role,
+            # A full eval run is up to 25 real Bedrock + real Amazon Location round-trips —
+            # generous headroom over the run_baseline_eval.py numbers actually measured
+            # (docs/overnight-2026-08-25.md), well under Lambda's 15-minute ceiling.
+            timeout=Duration.minutes(10),
+            memory_size=1024,
+            environment={
+                "ISIMIP_BUCKET": isimip_data_bucket.bucket_name,
+                "LOCATION_INDEX_NAME": geocode_index.index_name,
+                "UNDERSTANDING_MODEL_ID": _TEMPORARY_MODEL_ID,
+                "MLFLOW_TRACKING_URI": f"http://{self.mlflow_service.load_balancer.load_balancer_dns_name}",
+            },
+            architecture=lambda_.Architecture.ARM_64,
+        )
+
+        events.Rule(
+            self,
+            "MonthlyDriftCheckSchedule",
+            schedule=events.Schedule.cron(minute="0", hour="9", day="1", month="*", year="*"),
+            targets=[targets.LambdaFunction(drift_check_fn)],
+        )
+
         CfnOutput(self, "UnderstandingServiceUrl", value=self.understanding_service.load_balancer.load_balancer_dns_name)
         CfnOutput(self, "NarrationServiceUrl", value=self.narration_service.load_balancer.load_balancer_dns_name)
         CfnOutput(self, "MlflowServiceUrl", value=self.mlflow_service.load_balancer.load_balancer_dns_name)
+        # The real, remaining piece of understanding()'s fine-tuning story: not the training run
+        # itself (no real training data exists yet — see services/understanding/finetune/
+        # build_training_dataset.py's own docstring), but the IAM role Bedrock needs to actually
+        # run one. Free to have sitting unused (IAM roles carry no ongoing cost) — the point is
+        # that once real training data exists, running trigger_finetune_job.py really is the
+        # entire remaining step, not "provision the role too." Trust policy matches AWS's own
+        # documented example (confirmed live against
+        # https://docs.aws.amazon.com/bedrock/latest/userguide/model-customization-iam-role.html),
+        # not guessed. Nova Pro's real FINE_TUNING support (confirmed live via `aws bedrock
+        # list-foundation-models --query "modelSummaries[?customizationsSupported[0]!=null]"`)
+        # only exists in us-east-1, not this stack's own home region (us-east-2) — the SourceArn
+        # condition below is deliberately hardcoded to us-east-1, not a mistake.
+        bedrock_finetune_role = iam.Role(
+            self,
+            "BedrockFineTuneRole",
+            assumed_by=iam.ServicePrincipal(
+                "bedrock.amazonaws.com",
+                conditions={
+                    "StringEquals": {"aws:SourceAccount": self.account},
+                    "ArnLike": {"aws:SourceArn": f"arn:aws:bedrock:us-east-1:{self.account}:model-customization-job/*"},
+                },
+            ),
+        )
+        isimip_data_bucket.grant_read(bedrock_finetune_role, "finetune/understanding/*")
+        isimip_data_bucket.grant_read_write(bedrock_finetune_role, "finetune/understanding/output/*")
+
         CfnOutput(self, "LangfuseSecretName", value=langfuse_secret.secret_name)
+        # Runs on its own monthly, but real for a demo too: `aws lambda invoke --function-name
+        # <this> --payload '{}' /tmp/out.json` runs the exact same check on demand.
+        CfnOutput(self, "DriftCheckFunctionName", value=drift_check_fn.function_name)
+        CfnOutput(self, "BedrockFineTuneRoleArn", value=bedrock_finetune_role.role_arn)

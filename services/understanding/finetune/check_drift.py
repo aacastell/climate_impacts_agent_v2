@@ -48,44 +48,48 @@ def _write_baseline(s3, bucket: str, baseline: dict) -> None:
     s3.put_object(Bucket=bucket, Key=BASELINE_KEY, Body=json.dumps(baseline, indent=2).encode("utf-8"), ContentType="application/json")
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("index_name")
-    parser.add_argument("--bucket", default="climate-impacts-isimip-raw-148323855774")
-    parser.add_argument("--model-id", default=DEFAULT_MODEL_ID)
-    parser.add_argument("--set-baseline", action="store_true", help="Record this run as the new baseline instead of comparing against the existing one.")
-    args = parser.parse_args()
+def run_drift_check(index_name: str, bucket: str, model_id: str = DEFAULT_MODEL_ID, *, set_baseline: bool = False, verbose: bool = True) -> dict | None:
+    """The actual check, callable from both main() (CLI, a human re-running this on demand) and
+    drift_check_handler.py (the monthly EventBridge-scheduled Lambda) — one implementation, two
+    entry points, so a scheduled run and a manual rerun are provably the same computation, not
+    two versions that can drift apart from each other.
 
+    Returns None on a baseline write (nothing to compare yet), otherwise detect_drift()'s full
+    result dict.
+    """
     bedrock = boto3.client("bedrock-runtime", region_name=REGION)
     location = boto3.client("location", region_name=REGION)
     s3 = boto3.client("s3", region_name=REGION)
 
-    model_client = BedrockConverseUnderstandingClient(bedrock, args.model_id)
+    model_client = BedrockConverseUnderstandingClient(bedrock, model_id)
     gwl_year_table = json.loads(
-        s3.get_object(Bucket=args.bucket, Key="processed/global/gwl_year_table.json")["Body"].read()
+        s3.get_object(Bucket=bucket, Key="processed/global/gwl_year_table.json")["Body"].read()
     )
 
-    print(f"Running eval against model_id={args.model_id} ...")
-    outcome = run_eval(model_client, location, args.index_name, gwl_year_table, verbose=False)
+    if verbose:
+        print(f"Running eval against model_id={model_id} ...")
+    outcome = run_eval(model_client, location, index_name, gwl_year_table, verbose=False)
     current = {
-        "model_id": args.model_id,
+        "model_id": model_id,
         "correct_count": outcome["correct_count"],
         "n": outcome["n"],
         "accuracy": outcome["summary"]["overall_accuracy"],
         "recorded_at": datetime.now(UTC).isoformat(),
     }
-    print(f"Current run: {current['correct_count']}/{current['n']} = {current['accuracy']:.1%}")
+    if verbose:
+        print(f"Current run: {current['correct_count']}/{current['n']} = {current['accuracy']:.1%}")
 
-    existing_baseline = _load_baseline(s3, args.bucket)
+    existing_baseline = _load_baseline(s3, bucket)
 
-    if args.set_baseline or existing_baseline is None:
-        _write_baseline(s3, args.bucket, current)
-        reason = "explicit --set-baseline" if args.set_baseline else "no baseline existed yet (bootstrap)"
-        print(f"Wrote this run as the new baseline ({reason}). Nothing to compare against this time.")
+    if set_baseline or existing_baseline is None:
+        _write_baseline(s3, bucket, current)
+        if verbose:
+            reason = "explicit --set-baseline" if set_baseline else "no baseline existed yet (bootstrap)"
+            print(f"Wrote this run as the new baseline ({reason}). Nothing to compare against this time.")
         with mlflow.start_run(run_name=f"understanding-drift-check-baseline-{current['recorded_at']}"):
-            mlflow.log_params({"model_id": args.model_id, "role": "baseline"})
+            mlflow.log_params({"model_id": model_id, "role": "baseline"})
             mlflow.log_metric("accuracy", current["accuracy"])
-        return
+        return None
 
     result = detect_drift(
         baseline_correct=existing_baseline["correct_count"],
@@ -94,15 +98,16 @@ def main() -> None:
         current_n=current["n"],
     )
 
-    print()
-    print(f"Baseline ({existing_baseline['model_id']}, recorded {existing_baseline['recorded_at']}): {result['baseline_accuracy']:.1%}")
-    print(f"Current  ({args.model_id}, recorded {current['recorded_at']}): {result['current_accuracy']:.1%}")
-    print(f"delta={result['delta']:+.1%}  z={result['z_statistic']:.3f}  p={result['p_value']:.4f}  alpha={result['alpha']}")
-    print("DRIFT DETECTED" if result["drift_detected"] else "No significant drift detected")
+    if verbose:
+        print()
+        print(f"Baseline ({existing_baseline['model_id']}, recorded {existing_baseline['recorded_at']}): {result['baseline_accuracy']:.1%}")
+        print(f"Current  ({model_id}, recorded {current['recorded_at']}): {result['current_accuracy']:.1%}")
+        print(f"delta={result['delta']:+.1%}  z={result['z_statistic']:.3f}  p={result['p_value']:.4f}  alpha={result['alpha']}")
+        print("DRIFT DETECTED" if result["drift_detected"] else "No significant drift detected")
 
     with mlflow.start_run(run_name=f"understanding-drift-check-{current['recorded_at']}"):
         mlflow.log_params({
-            "model_id": args.model_id,
+            "model_id": model_id,
             "baseline_model_id": existing_baseline["model_id"],
             "baseline_recorded_at": existing_baseline["recorded_at"],
             "role": "check",
@@ -116,7 +121,20 @@ def main() -> None:
             "drift_detected": 1.0 if result["drift_detected"] else 0.0,
         })
 
-    if result["drift_detected"]:
+    return result
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("index_name")
+    parser.add_argument("--bucket", default="climate-impacts-isimip-raw-148323855774")
+    parser.add_argument("--model-id", default=DEFAULT_MODEL_ID)
+    parser.add_argument("--set-baseline", action="store_true", help="Record this run as the new baseline instead of comparing against the existing one.")
+    args = parser.parse_args()
+
+    result = run_drift_check(args.index_name, args.bucket, args.model_id, set_baseline=args.set_baseline)
+
+    if result is not None and result["drift_detected"]:
         sys.exit(1)  # real signal for a scheduled job to alert on, not just a print a human might miss
 
 

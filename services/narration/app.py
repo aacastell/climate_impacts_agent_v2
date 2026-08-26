@@ -2,9 +2,9 @@
 service-boundary decision, see docs/adr/adr-007-narration-verification-gate.md's Accompanying
 decisions: RAG's only consumer is narration, so no separate network hop for it.
 
-Real Bedrock generation/verification client; corpus is honestly empty pending real literature
-curation (see corpus.py) — retrieval will return no passages until that's filled in, which is
-correct, not broken.
+Real Bedrock generation/verification client; corpus.py now holds a first real draft (11 real,
+sourced, mechanism-only entries, real precomputed embeddings) — not yet scientifically reviewed
+line-by-line, see corpus.py's own docstring for status.
 """
 
 import logging

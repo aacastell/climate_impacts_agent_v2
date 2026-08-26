@@ -1,3 +1,5 @@
+import json
+
 import aws_cdk as cdk
 from aws_cdk import aws_s3 as s3
 from aws_cdk.assertions import Match, Template
@@ -160,6 +162,45 @@ def test_both_services_scale_on_request_count_not_cpu():
     for policy in policies:
         metric_type = policy["Properties"]["TargetTrackingScalingPolicyConfiguration"]["PredefinedMetricSpecification"]["PredefinedMetricType"]
         assert metric_type == "ALBRequestCountPerTarget"
+
+
+def test_drift_check_runs_on_a_monthly_schedule():
+    # Real regression guard: check_drift.py's own docstring is explicit that running this more
+    # than infrequently inflates the true false-positive rate past the nominal alpha (repeated
+    # significance testing) — monthly is a deliberate, defensible cadence, not a placeholder.
+    resources = _template().to_json()["Resources"]
+    rules = [r for r in resources.values() if r["Type"] == "AWS::Events::Rule"]
+    assert len(rules) == 1
+    assert rules[0]["Properties"]["ScheduleExpression"] == "cron(0 9 1 * ? *)"
+    targets = rules[0]["Properties"]["Targets"]
+    assert len(targets) == 1
+
+
+def test_drift_check_lambda_targets_the_real_mlflow_and_place_index():
+    # Real regression guard: a drift check that logs nowhere or geocodes against nothing isn't
+    # actually monitoring anything — this asserts it's wired to the real resources this stack
+    # already provisions, not disconnected infra sitting next to them.
+    resources = _template().to_json()["Resources"]
+    lambda_fns = [r for r in resources.values() if r["Type"] == "AWS::Lambda::Function"]
+    assert len(lambda_fns) == 1, "this stack's only Lambda should be the drift-check function"
+    env = lambda_fns[0]["Properties"]["Environment"]["Variables"]
+    assert "LOCATION_INDEX_NAME" in env
+    assert "MLFLOW_TRACKING_URI" in env
+    assert isinstance(env["MLFLOW_TRACKING_URI"], dict), "expected a CDK token pointing at the real MlflowService, not a literal string"
+
+
+def test_bedrock_finetune_role_trusts_bedrock_scoped_to_the_real_finetune_region():
+    # Real regression guard: Nova Pro's FINE_TUNING support (confirmed live via `aws bedrock
+    # list-foundation-models`) only exists in us-east-1, not this stack's own home region
+    # (us-east-2) — a trust policy scoped to the wrong region would make the role real but
+    # useless the moment someone actually tries to use it.
+    resources = _template().to_json()["Resources"]
+    role = next(r for key, r in resources.items() if r["Type"] == "AWS::IAM::Role" and key.startswith("BedrockFineTuneRole"))
+    statement = role["Properties"]["AssumeRolePolicyDocument"]["Statement"][0]
+    assert statement["Principal"]["Service"] == "bedrock.amazonaws.com"
+    source_arn = json.dumps(statement["Condition"]["ArnLike"]["aws:SourceArn"])
+    assert "us-east-1" in source_arn
+    assert "model-customization-job" in source_arn
 
 
 def test_both_services_have_health_checks():
