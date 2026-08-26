@@ -10,6 +10,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "h5wasm": "^0.10.3",
     "maplibre-gl": "^6.5.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8"

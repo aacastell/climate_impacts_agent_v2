@@ -1,20 +1,8 @@
 import json
-import shutil
-
-import numpy as np
-import xarray as xr
 
 from interpret_handler import interpret
 
 LON, LAT = -93.6, 42.0
-
-
-class _FakeS3:
-    def __init__(self, objects: dict):
-        self.objects = objects
-
-    def download_file(self, bucket, key, dest):
-        shutil.copyfile(self.objects[key], dest)
 
 
 class _FakeResponse:
@@ -73,30 +61,12 @@ class _FakeSessionTable:
         self.items.pop(Key["query_id"], None)
 
 
-def _write_field_fixture(path, output_field: str, value: float) -> None:
-    data = np.array([[value, 999.0], [999.0, 999.0]])
-    ds = (
-        xr.DataArray(data, dims=["lat", "lon"], coords={"lat": [LAT, -LAT], "lon": [LON, -LON]})
-        .rename(output_field)
-        .to_dataset()
-    )
-    ds.to_netcdf(path)
-
-
-def _build_fake_s3(tmp_path) -> _FakeS3:
-    remote_dir = tmp_path / "remote"
-    remote_dir.mkdir()
-    objects = {}
-    fields = [("tas", 1.8), ("pr_abs", 2e-5), ("pr_pct", 5.0), ("consecutive_dry_days", 3.0), ("extreme_heat_days", 7.0), ("maize_pct", -12.3)]
-    for output_field, value in fields:
-        src = remote_dir / f"{output_field}.nc"
-        _write_field_fixture(src, output_field, value)
-        objects[f"processed/global/{output_field}/y2045.nc"] = src
-    return _FakeS3(objects)
-
-
-def test_interpret_returns_full_answer_when_understanding_resolves(tmp_path):
-    s3 = _build_fake_s3(tmp_path)
+def test_interpret_returns_real_identifiers_not_computed_values_when_understanding_resolves():
+    # ADR-004's restored decision: interpret() never computes or extracts a scientific value — it
+    # returns real identifiers (region/crop/year plus each indicator's real precomputed-store
+    # output field name) that the frontend uses to fetch and parse the matching file itself. This
+    # Lambda touches no S3, no NetCDF, no xarray at all anymore (see api/Dockerfile's real,
+    # measured ~114ms cold-import time versus the shared-image predecessor).
     http_client = _FakeHttpClient(
         {
             "kind": "resolved",
@@ -107,7 +77,7 @@ def test_interpret_returns_full_answer_when_understanding_resolves(tmp_path):
         }
     )
 
-    result = interpret(s3, "bucket", tmp_path / "work", http_client, "How will maize yields in Iowa change at 2C?")
+    result = interpret(http_client, "How will maize yields in Iowa change at 2C?")
 
     assert result["kind"] == "answer"
     assert result["interpretation"] == {
@@ -118,19 +88,28 @@ def test_interpret_returns_full_answer_when_understanding_resolves(tmp_path):
         "warmingLevelC": 2.0,
         "year": 2045,
     }
-    assert result["sectorMap"]["value"] == -12.3
-    indicators = {i["id"]: i for i in result["climateMap"]["indicators"]}
-    assert indicators["temp_change"]["value"] == 1.8
-    assert indicators["precip_change_abs"]["value"] == round(2e-5 * 86400, 4)
+    assert "value" not in result["sectorMap"]
+    assert "grid" not in result["sectorMap"]
+    assert result["sectorMap"]["outputField"] == "maize_pct"
 
-    # Real regional shading data, not just the single scalar — see
-    # pipeline/climate_pipeline/query/lookup.py's grid_patch. The fixture's own two cells are
-    # ~187°/84° apart, well outside the default 2° radius, so only the resolved cell itself
-    # falls in the box — still a real, non-degenerate grid shape, and the same unit conversion
-    # as the scalar (mm/day, not the raw per-second flux) applies to the grid too.
-    assert indicators["temp_change"]["grid"]["values"] == [[1.8]]
-    assert indicators["precip_change_abs"]["grid"]["values"] == [[round(2e-5 * 86400, 4)]]
-    assert result["sectorMap"]["grid"]["values"] == [[-12.3]]
+    indicators = {i["id"]: i for i in result["climateMap"]["indicators"]}
+    assert "value" not in indicators["temp_change"]
+    assert "grid" not in indicators["temp_change"]
+    assert indicators["temp_change"]["outputField"] == "tas"
+    assert indicators["precip_change_abs"]["outputField"] == "pr_abs"
+    assert indicators["precip_change_pct"]["outputField"] == "pr_pct"
+    assert indicators["consecutive_dry_days"]["outputField"] == "consecutive_dry_days"
+    assert indicators["extreme_heat_days"]["outputField"] == "extreme_heat_days"
+
+
+def test_interpret_refuses_an_unsupported_crop():
+    http_client = _FakeHttpClient(
+        {"kind": "resolved", "region": {"name": "Iowa", "lon": LON, "lat": LAT}, "crop": "barley", "warmingLevelC": 2.0, "year": 2045}
+    )
+
+    result = interpret(http_client, "How will barley yields in Iowa change at 2C?")
+
+    assert result == {"kind": "refusal", "reason": "unsupported_crop", "message": "'barley' is not one of the four supported crops."}
 
 
 def test_interpret_starts_a_session_on_clarify_and_returns_a_query_id():
@@ -148,7 +127,7 @@ def test_interpret_starts_a_session_on_clarify_and_returns_a_query_id():
     })
     session_table = _FakeSessionTable()
 
-    result = interpret(None, "bucket", None, http_client, "What about Mekong?", session_table=session_table)
+    result = interpret(http_client, "What about Mekong?", session_table=session_table)
 
     assert result["kind"] == "clarify"
     assert result["question"] == "Did you mean the Vietnamese Mekong Delta?"
@@ -189,10 +168,11 @@ def test_interpret_resumes_a_session_by_appending_the_answer_as_a_plain_text_tur
         "expires_at": 9999999999,
     })
     # "refusal", not "resolved" — this test is about the session/resume mechanics, not the
-    # indicator-lookup path (covered by test_interpret_returns_full_answer_when_understanding_resolves).
+    # identifier-resolution path (covered by
+    # test_interpret_returns_real_identifiers_not_computed_values_when_understanding_resolves).
     http_client = _FakeHttpClient({"kind": "refusal", "reason": "no_resolution", "message": "Still couldn't resolve it."})
 
-    result = interpret(None, "bucket", None, http_client, "ignored on resume", session_table=session_table, query_id="abc123", answer="The Vietnamese one.")
+    result = interpret(http_client, "ignored on resume", session_table=session_table, query_id="abc123", answer="The Vietnamese one.")
 
     sent = http_client.calls[0]["json"]
     assert sent["question"] == "What about Mekong?"
@@ -208,7 +188,7 @@ def test_interpret_returns_a_typed_refusal_for_an_unknown_or_expired_query_id():
     session_table = _FakeSessionTable()
     http_client = _FakeHttpClient({})  # never called — the session lookup fails before any HTTP call
 
-    result = interpret(None, "bucket", None, http_client, "ignored", session_table=session_table, query_id="does-not-exist", answer="whatever")
+    result = interpret(http_client, "ignored", session_table=session_table, query_id="does-not-exist", answer="whatever")
 
     assert result["kind"] == "refusal"
     assert result["reason"] == "session_expired"
@@ -217,5 +197,5 @@ def test_interpret_returns_a_typed_refusal_for_an_unknown_or_expired_query_id():
 
 def test_interpret_passes_refusal_through():
     http_client = _FakeHttpClient({"kind": "refusal", "reason": "no_resolution", "message": "Could not resolve."})
-    result = interpret(None, "bucket", None, http_client, "asdf")
+    result = interpret(http_client, "asdf")
     assert result == {"kind": "refusal", "reason": "no_resolution", "message": "Could not resolve."}

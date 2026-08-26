@@ -1,0 +1,19 @@
+# narrate()'s own Lambda image — split from interpret()'s (see Dockerfile's own docstring for
+# why). This one genuinely needs climate_pipeline's real NetCDF-reading dependencies: narrate()
+# re-derives climate evidence server-side (ADR-004 Step 4's "pure function of the interpretation
+# alone") to feed the LLM narration and its verification gate — a real computation, not a display
+# concern, unlike interpret()'s now-removed grid/value lookups. Build context is the repo root —
+# see infra/stacks/api_stack.py for the real build invocation.
+FROM public.ecr.aws/lambda/python:3.12
+
+COPY pipeline/climate_pipeline ${LAMBDA_TASK_ROOT}/climate_pipeline
+COPY api/requirements.txt ${LAMBDA_TASK_ROOT}/api-requirements.txt
+# pipeline/requirements-lookup.txt, not pipeline/requirements.txt — the full pipeline requirements
+# file installs dvc[s3] and dask for the offline data pipeline's own stages, neither ever called
+# from a live query; see that file's own comment for the exact minimal set narrate() actually needs.
+COPY pipeline/requirements-lookup.txt ${LAMBDA_TASK_ROOT}/pipeline-requirements.txt
+RUN pip install --no-cache-dir -r ${LAMBDA_TASK_ROOT}/api-requirements.txt -r ${LAMBDA_TASK_ROOT}/pipeline-requirements.txt
+
+COPY api/narrate_handler.py api/narrate_lambda_handler.py ${LAMBDA_TASK_ROOT}/
+
+CMD ["narrate_lambda_handler.handler"]

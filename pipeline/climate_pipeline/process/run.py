@@ -38,7 +38,6 @@ import boto3
 import xarray as xr
 from botocore.exceptions import ClientError
 
-from climate_pipeline.fetch.agriculture import CROPS
 from climate_pipeline.fetch.manifest import write_manifest
 from climate_pipeline.process.extract import (
     absolute_change,
@@ -47,6 +46,7 @@ from climate_pipeline.process.extract import (
     percent_change_grid,
     yield_grid_mean,
 )
+from climate_pipeline.process.field_names import CROP_FIELDS, FIELD_VARIANTS, output_field_name
 from climate_pipeline.process.indices import (
     consecutive_dry_days_per_year,
     extreme_heat_days_per_year,
@@ -57,17 +57,7 @@ BASELINE_START_YEAR = 1995
 BASELINE_END_YEAR = 2014
 
 CLIMATE_FIELDS = ["tas", "pr", "consecutive_dry_days", "extreme_heat_days"]
-CROP_FIELDS = list(CROPS)
 ALL_FIELDS = CLIMATE_FIELDS + CROP_FIELDS
-
-# Which change-kind(s) each field gets — see module docstring for the reasoning.
-FIELD_VARIANTS = {
-    "tas": ["absolute"],
-    "pr": ["absolute", "percent"],
-    "consecutive_dry_days": ["absolute"],
-    "extreme_heat_days": ["absolute"],
-    **{crop: ["absolute", "percent"] for crop in CROP_FIELDS},
-}
 
 # The exact two fetch manifests each field needs — its own real data dependency, nothing more.
 # consecutive_dry_days/extreme_heat_days are derived indices but still only ever touch pr/tas
@@ -82,13 +72,6 @@ FIELD_MANIFESTS = {
 
 EXPECTED_GRID_LAT = 360
 EXPECTED_GRID_LON = 720
-
-
-def output_field_name(base_field: str, kind: str) -> str:
-    variants = FIELD_VARIANTS[base_field]
-    if len(variants) == 1:
-        return base_field
-    return f"{base_field}_{'abs' if kind == 'absolute' else 'pct'}"
 
 
 def _download(s3, bucket: str, key: str, dest: Path) -> Path:

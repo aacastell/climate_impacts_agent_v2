@@ -29,7 +29,8 @@
   white-space: nowrap;
 }
 
-.result-map-canvas {
+.result-map-canvas-wrap {
+  position: relative;
   width: 100%;
   /* Fixed, and first in source order (see ResultMap.tsx) — the map itself
      is always the same size and top-aligned across boxes, regardless of
@@ -37,6 +38,26 @@
      down by a variable amount (title above it) was the actual bug; a
      variable-height caption below a fixed-size map is harmless. */
   height: 320px;
+}
+
+.result-map-canvas {
+  width: 100%;
+  height: 100%;
+}
+
+.result-map-loading {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.55);
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  /* Real: this map's own client-side fetch (see App.tsx) genuinely hasn't resolved yet — not a
+     fabricated delay to make loading "feel" staggered. */
+  pointer-events: none;
 }
 
 .result-map-marker {

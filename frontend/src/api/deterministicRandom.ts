@@ -1,9 +1,6 @@
-// Small deterministic PRNG: same seed string always produces the same
-// sequence, so demo output stays stable across requests/renders without
-// needing a real backend to persist anything. Shared by MockApiClient (all
-// four climate indicators) and PrecomputedApiClient (the two indicators —
-// consecutive_dry_days, extreme_heat_days — that stay synthetic until a
-// real climate-index methodology is decided; see pipeline/README.md).
+// Small deterministic PRNG: same seed string always produces the same sequence, so MockApiClient's
+// demo output stays stable across requests/renders without needing a real backend to persist
+// anything.
 
 export function hashSeed(input: string): number {
   let h = 0;

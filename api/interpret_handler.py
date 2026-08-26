@@ -1,6 +1,12 @@
-"""interpret() — ADR-004's fast call. Resolves a question via understanding() (real HTTP call to
-that service), then reads every value from Phase 1's precomputed store directly (no LLM ever
-touches a scientific value — ADR-005 Step 3).
+"""interpret() — ADR-004's fast call, restored to ADR-004's actual decision after a real,
+acknowledged drift: "the query API never computes or extracts shading values; it only tells the
+frontend which precomputed slice to load." interpret() itself does not read S3 or touch a
+scientific value at all anymore — it returns real identifiers (resolved region, crop, warming
+level, year, and each indicator's real output-field name) that the frontend uses to fetch the
+matching precomputed file directly from CloudFront (see frontend/src/precomputedFetch.ts) and
+parse it client-side. This also means this Lambda has no xarray/numpy/netCDF4 dependency at all
+— see api/Dockerfile — unlike narrate_handler.py, which still needs one real server-side scalar
+per fact (feeds the LLM narration + its verification gate, not a display concern).
 
 The interpretation this returns carries lon/lat and the resolved year, not just a region name —
 a deliberate real-backend refinement over frontend/src/api/types.ts's current QueryInterpretation
@@ -25,13 +31,12 @@ import uuid
 
 import httpx
 
-from climate_pipeline.process.run import CROP_FIELDS
-from climate_pipeline.query.lookup import lookup_grid, lookup_value
+from climate_pipeline.process.field_names import CROP_FIELDS, output_field_name
 
 UNDERSTANDING_URL = os.environ.get("UNDERSTANDING_URL", "http://localhost:8000")
 SESSION_TTL_SECONDS = 900  # 15 minutes — long enough for a real user to read and answer a clarifying question, short enough that DynamoDB's own TTL sweep clears stale sessions without any code here having to run a cleanup job.
 
-# frontend indicator id -> (base_field, kind, unit). See climate_pipeline/process/run.py's
+# frontend indicator id -> (base_field, kind, unit). See climate_pipeline/process/field_names.py's
 # FIELD_VARIANTS for why pr has both variants and tas doesn't.
 _CLIMATE_INDICATORS = [
     ("temp_change", "tas", "absolute", "°C"),
@@ -40,11 +45,6 @@ _CLIMATE_INDICATORS = [
     ("consecutive_dry_days", "consecutive_dry_days", "absolute", "days"),
     ("extreme_heat_days", "extreme_heat_days", "absolute", "days"),
 ]
-
-# 1 kg/m^2 of water = 1mm depth; pr is stored in the canonical store as a per-second flux (CF/
-# ISIMIP convention, kg m-2 s-1) — converting to the human-readable mm/day the frontend displays
-# is a presentation-layer concern, done here at query time, not baked into the precomputed store.
-_KG_M2_S1_TO_MM_PER_DAY = 86400.0
 
 _DISCLAIMERS = [
     "Management is frozen at 2015 conditions (2015soc) — no adaptation is represented.",
@@ -67,37 +67,7 @@ def _refusal(reason: str, message: str) -> dict:
     return {"kind": "refusal", "reason": reason, "message": message}
 
 
-def _indicator_value(s3, bucket: str, base_field: str, kind: str, year: int, lon: float, lat: float, work_dir):
-    value = lookup_value(s3, bucket, base_field, kind, year, lon, lat, work_dir)
-    if base_field == "pr" and kind == "absolute":
-        value *= _KG_M2_S1_TO_MM_PER_DAY
-    return value
-
-
-# Real regional shading, not decoration: the frontend used to render a single colored dot
-# regardless of what "region" meant, even though the precomputed store has always held a full
-# global grid per field (see pipeline/climate_pipeline/query/lookup.py's grid_patch — the whole
-# small object lookup_value already downloads, just read more of it). RADIUS_DEG=2.0 is a
-# real-world-meaningful box (≈220km at the equator, real ISIMIP 0.5° cells), not an arbitrary
-# pixel count — kept small deliberately so the response payload stays small (see
-# _indicator_grid's own docstring).
-_GRID_RADIUS_DEG = 2.0
-
-
-def _indicator_grid(s3, bucket: str, base_field: str, kind: str, year: int, lon: float, lat: float, work_dir) -> dict:
-    """Same real precomputed data _indicator_value reads, as a small spatial patch instead of one
-    scalar — same unit conversion, same convert-then-round order as the scalar path (see
-    grid_patch's own docstring for why the order matters), so the map's shading and its own
-    labeled value are never in different units or subtly different numbers from rounding twice."""
-    grid = lookup_grid(s3, bucket, base_field, kind, year, lon, lat, work_dir, radius_deg=_GRID_RADIUS_DEG)
-    convert = (lambda v: v * _KG_M2_S1_TO_MM_PER_DAY) if (base_field == "pr" and kind == "absolute") else (lambda v: v)
-    return {
-        **grid,
-        "values": [[None if v is None else round(convert(v), 4) for v in row] for row in grid["values"]],
-    }
-
-
-def interpret(s3, bucket: str, work_dir, http_client, question: str, *, session_table=None, query_id: str | None = None, answer: str | None = None) -> dict:
+def interpret(http_client, question: str, *, session_table=None, query_id: str | None = None, answer: str | None = None) -> dict:
     """session_table: a DynamoDB Table resource (boto3.resource("dynamodb").Table(...)), or a
     fake exposing the same get_item/put_item/delete_item(Key=...) surface in tests. None is only
     valid when this call can never hit a clarify() outcome (existing tests that only exercise
@@ -171,13 +141,13 @@ def interpret(s3, bucket: str, work_dir, http_client, question: str, *, session_
             "id": indicator_id,
             "title": f"{indicator_id} at {warming_level_c}°C global warming",
             "unit": unit,
-            "value": round(_indicator_value(s3, bucket, base_field, field_kind, year, lon, lat, work_dir), 4),
-            "grid": _indicator_grid(s3, bucket, base_field, field_kind, year, lon, lat, work_dir),
+            # Real identifier only — the frontend derives the exact S3/CDN key
+            # (processed/global/{outputField}/y{year}.nc) and fetches + parses it itself. No
+            # value, no grid: this Lambda never touches the precomputed store (ADR-004).
+            "outputField": output_field_name(base_field, field_kind),
         }
         for indicator_id, base_field, field_kind, unit in _CLIMATE_INDICATORS
     ]
-    yield_change_pct = round(_indicator_value(s3, bucket, crop_key, "percent", year, lon, lat, work_dir), 2)
-    yield_grid = _indicator_grid(s3, bucket, crop_key, "percent", year, lon, lat, work_dir)
 
     return {
         "kind": "answer",
@@ -193,8 +163,7 @@ def interpret(s3, bucket: str, work_dir, http_client, question: str, *, session_
         "sectorMap": {
             "title": f"{crop_key} yield change at {warming_level_c}°C global warming",
             "unit": "% yield change",
-            "value": yield_change_pct,
-            "grid": yield_grid,
+            "outputField": output_field_name(crop_key, "percent"),
             "center": {"lon": lon, "lat": lat},
             "zoom": 5,
         },

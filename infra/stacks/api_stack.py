@@ -15,10 +15,15 @@ from constructs import Construct
 class ApiStack(Stack):
     """The real orchestration/API tier — Lambda, per ADR-005's resolved compute-topology decision
     (this tier has nothing persistent to amortize, unlike understanding()/narration() on
-    ECS/Fargate — see ModelServicesStack). Two functions, one shared container image (climate_
-    pipeline's dependencies are heavy enough to need a container image, not a ZIP package), each
-    pointed at a different handler within it via CMD override — not two separate image builds for
-    what's the same real dependency set.
+    ECS/Fargate — see ModelServicesStack). Two functions, two separate container images (not one
+    shared image with a CMD override, as this stack used to do) — a real, deliberate split: since
+    ADR-004's actual decision was restored (interpret() returns identifiers only, never touches
+    the precomputed store), interpret()'s image genuinely no longer needs climate_pipeline's
+    xarray/netCDF4/numpy dependency at all, confirmed live (its handler imports in ~114ms with
+    only boto3+httpx installed) — a shared image with narrate() (which still needs those for its
+    own real server-side verification-gate lookups) would mean interpret()'s cold start kept
+    paying for weight it never uses. Each function also gets its own least-privilege role now for
+    the same reason — interpret() has no S3 access to grant anymore.
 
     UNDERSTANDING_URL/NARRATION_URL point at those services' ALBs once ModelServicesStack is
     actually deployed; wired here as constructor args so this stack never hardcodes them.
@@ -40,22 +45,11 @@ class ApiStack(Stack):
     ) -> None:
         super().__init__(scope, construct_id, **kwargs)
 
-        # cmd (the handler override) is a real parameter of DockerImageCode.from_image_asset, not
-        # of DockerImageFunction itself (confirmed live against the installed CDK version) — one
-        # from_image_asset call per handler, same directory/Dockerfile, CDK content-addresses the
-        # underlying image build so this doesn't mean building the image twice.
-        interpret_image_code = lambda_.DockerImageCode.from_image_asset(
-            directory="..", file="api/Dockerfile", cmd=["lambda_handler.interpret_lambda_handler"]
-        )
-        narrate_image_code = lambda_.DockerImageCode.from_image_asset(
-            directory="..", file="api/Dockerfile", cmd=["lambda_handler.narrate_lambda_handler"]
-        )
-
-        execution_role = iam.Role(self, "ApiLambdaRole", assumed_by=iam.ServicePrincipal("lambda.amazonaws.com"))
-        execution_role.add_managed_policy(
-            iam.ManagedPolicy.from_aws_managed_policy_name("service-role/AWSLambdaBasicExecutionRole")
-        )
-        isimip_data_bucket.grant_read(execution_role)
+        # Two real, separate image builds now — see this class's own docstring for why a shared
+        # image + CMD override (this stack's previous design) stopped making sense once
+        # interpret() genuinely dropped its climate_pipeline data dependency.
+        interpret_image_code = lambda_.DockerImageCode.from_image_asset(directory="..", file="api/Dockerfile")
+        narrate_image_code = lambda_.DockerImageCode.from_image_asset(directory="..", file="api/Dockerfile.narrate")
 
         # ADR-005's "workflow is stateful, compute layer stays stateless" design for clarify()
         # round-trips: a request needing clarification gets a query_id, its partial resolution
@@ -73,14 +67,20 @@ class ApiStack(Stack):
             time_to_live_attribute="expires_at",
             removal_policy=RemovalPolicy.DESTROY,
         )
-        session_table.grant_read_write_data(execution_role)
 
-        common_env = {
-            "ISIMIP_BUCKET": isimip_data_bucket.bucket_name,
-            "UNDERSTANDING_URL": understanding_url,
-            "NARRATION_URL": narration_url,
-            "SESSION_TABLE_NAME": session_table.table_name,
-        }
+        # Least privilege, one role per real access pattern — interpret() never touches S3
+        # anymore, so it never gets that grant; narrate() never touches the session table.
+        interpret_role = iam.Role(self, "InterpretLambdaRole", assumed_by=iam.ServicePrincipal("lambda.amazonaws.com"))
+        interpret_role.add_managed_policy(
+            iam.ManagedPolicy.from_aws_managed_policy_name("service-role/AWSLambdaBasicExecutionRole")
+        )
+        session_table.grant_read_write_data(interpret_role)
+
+        narrate_role = iam.Role(self, "NarrateLambdaRole", assumed_by=iam.ServicePrincipal("lambda.amazonaws.com"))
+        narrate_role.add_managed_policy(
+            iam.ManagedPolicy.from_aws_managed_policy_name("service-role/AWSLambdaBasicExecutionRole")
+        )
+        isimip_data_bucket.grant_read(narrate_role)
 
         # Real bug caught live in ModelServicesStack before it could repeat here: cdk deploy
         # builds these Docker images locally, and on an Apple Silicon Mac that's ARM64 — Lambda
@@ -93,10 +93,13 @@ class ApiStack(Stack):
             self,
             "InterpretFunction",
             code=interpret_image_code,
-            role=execution_role,
+            role=interpret_role,
             timeout=Duration.seconds(30),
             memory_size=1024,
-            environment=common_env,
+            environment={
+                "UNDERSTANDING_URL": understanding_url,
+                "SESSION_TABLE_NAME": session_table.table_name,
+            },
             architecture=_ARCHITECTURE,
         )
 
@@ -104,12 +107,15 @@ class ApiStack(Stack):
             self,
             "NarrateFunction",
             code=narrate_image_code,
-            role=execution_role,
+            role=narrate_role,
             # Narrate does real LLM generation + verification, real retries — a longer timeout
-            # than interpret's cheap precomputed-grid lookups.
+            # than interpret's cheap identifier resolution.
             timeout=Duration.seconds(60),
             memory_size=1024,
-            environment=common_env,
+            environment={
+                "ISIMIP_BUCKET": isimip_data_bucket.bucket_name,
+                "NARRATION_URL": narration_url,
+            },
             architecture=_ARCHITECTURE,
         )
 

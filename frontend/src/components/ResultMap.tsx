@@ -146,11 +146,16 @@ interface ResultMapProps {
    * the single dot. Optional so a caller with no grid data yet (or none at all) still renders a
    * valid map, same as before this existed. */
   grid?: GridPatch;
+  /** True while this map's own real data is still being fetched (see App.tsx's per-field
+   * client-side fetch) — a real loading state, not a fabricated staggered-reveal animation: each
+   * map genuinely does resolve independently now (ADR-004's restored decision moved the fetch
+   * client-side), this just reflects that honestly instead of showing stale/zeroed shading. */
+  isLoading?: boolean;
   /** Rendered between the header and the map canvas, e.g. an indicator toggle. */
   toggle?: ReactNode;
 }
 
-export function ResultMap({ title, center, zoom, value, unit, valueLabel, colorScale, grid, toggle }: ResultMapProps) {
+export function ResultMap({ title, center, zoom, value, unit, valueLabel, colorScale, grid, isLoading, toggle }: ResultMapProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
   const markerRef = useRef<Marker | null>(null);
@@ -235,7 +240,14 @@ export function ResultMap({ title, center, zoom, value, unit, valueLabel, colorS
 
   return (
     <div className="result-map">
-      <div ref={containerRef} className="result-map-canvas" />
+      <div className="result-map-canvas-wrap">
+        <div ref={containerRef} className="result-map-canvas" />
+        {isLoading && (
+          <div className="result-map-loading" role="status">
+            Loading…
+          </div>
+        )}
+      </div>
       <div className="result-map-header">
         <h3>{title}</h3>
         <span className="result-map-value">{valueLabel}</span>

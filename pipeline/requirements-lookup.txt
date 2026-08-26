@@ -1,0 +1,12 @@
+# The real, minimal subset of pipeline/requirements.txt that api/interpret_handler.py and
+# api/narrate_handler.py actually need at runtime (climate_pipeline.query.lookup's real NetCDF
+# reads, plus CROP_FIELDS/FIELD_VARIANTS from climate_pipeline.process.run) — not the full
+# pipeline/requirements.txt, which also installs dvc[s3] and dask for the offline data pipeline's
+# own DVC-orchestrated stages, neither ever called from a live query. Real, measured difference:
+# 432MB installed with the full file vs. 254MB with just this one — a real, confirmed contributor
+# to this Lambda's cold-start init time (a real INIT_REPORT ... Status: timeout was observed in
+# production before this existed). boto3/httpx are already in api/requirements.txt, not repeated
+# here.
+numpy>=1.26.0
+xarray>=2024.3.0
+netCDF4>=1.6.5

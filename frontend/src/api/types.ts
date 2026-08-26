@@ -67,14 +67,23 @@ export interface GridPatch {
 // Single climate model (GFDL-ESM4) — a single value per indicator, never a
 // range. Framing this as a range or interval would fabricate an uncertainty
 // estimate the data doesn't support.
+//
+// Two real, mutually-exclusive shapes, not one backend contract — ADR-004's restored decision:
+// the real backend (api/interpret_handler.py) returns identifiers only (`outputField`), never a
+// computed value — App.tsx fetches and parses the matching precomputed file itself (see
+// frontend/src/precomputedFetch.ts) and derives `value`/`grid` client-side from it.
+// MockApiClient predates that restoration and still provides `value`/`grid` directly (no real
+// backend to defer to) — both are valid, App.tsx checks which one it got.
 export interface ClimateIndicatorPayload {
   id: ClimateIndicatorId;
   title: string;
   unit: string;
-  value: number;
-  // Optional: only the real backend (api/interpret_handler.py) populates this — MockApiClient
-  // and PrecomputedApiClient predate real regional shading and stay marker-only rather than
-  // fabricate a synthetic grid just to satisfy this field.
+  /** Real precomputed-store field name (e.g. "pr_abs") — present when this came from the real
+   * backend; App.tsx fetches processed/global/{outputField}/y{year}.nc itself. */
+  outputField?: string;
+  /** Present only from MockApiClient, which computes this synthetically rather than deferring to
+   * a client-side fetch. */
+  value?: number;
   grid?: GridPatch;
 }
 
@@ -93,7 +102,9 @@ export interface ClimateMapPayload {
 export interface SectorMapPayload {
   title: string;
   unit: string;
-  value: number;
+  /** See ClimateIndicatorPayload's own comment — same two-shape contract. */
+  outputField?: string;
+  value?: number;
   grid?: GridPatch;
   center: MapCenter;
   zoom: number;
@@ -164,8 +175,8 @@ export type QueryResponse = QueryAnswer | QueryClarify | QueryRefusal;
 
 export interface ApiClient {
   submitQuery(request: QueryRequest): Promise<QueryResponse>;
-  // Resumes a clarify() round-trip. Clients that never emit QueryClarify (MockApiClient,
-  // PrecomputedApiClient) are not required to make this reachable — see their implementations.
+  // Resumes a clarify() round-trip. Clients that never emit QueryClarify (MockApiClient) are
+  // not required to make this reachable — see its own implementation.
   submitClarifyAnswer(resume: ClarifyResumeRequest): Promise<QueryResponse>;
   fetchNarration(interpretation: QueryInterpretation): Promise<NarrationResult>;
 }

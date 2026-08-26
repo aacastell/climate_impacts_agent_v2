@@ -12,11 +12,10 @@ import type {
 import { hashSeed, seededRandom } from "./deterministicRandom";
 import { CROP_LABELS, findCrop, findRegion, findWarmingLevel } from "./questionParsing";
 
-// Stands in for the API tier, which is not yet decided (see repo README
-// "Status" table). Parses just enough of the question to demonstrate the
-// UI end to end with plausible, deterministic data. None of the numbers
-// here are real ISIMIP output — see PrecomputedApiClient for the real-data
-// counterpart, once process-stage output actually exists.
+// Local dev stand-in for the real backend (a real one exists and is deployed — see
+// HttpApiClient) — no network, no AWS credentials needed. Parses just enough of the question to
+// demonstrate the UI end to end with plausible, deterministic data. None of the numbers here are
+// real ISIMIP output.
 
 function buildClimateIndicators(
   warmingLevelC: number,

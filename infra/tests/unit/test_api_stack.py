@@ -40,21 +40,26 @@ def test_both_functions_run_on_arm64_matching_the_locally_built_image():
         assert fn["Properties"]["Architectures"] == ["arm64"]
 
 
-def test_functions_share_one_built_image_but_override_the_handler_per_function():
-    # Confirmed live against the real synthesized template: cmd on DockerImageCode.from_image_asset
-    # does NOT change the built image (both functions share one image asset — efficient, no
-    # duplicate build) — it's injected as each function's own ImageConfig.Command override
-    # instead. Real regression guard that interpret/narrate actually run different handlers, not
-    # a guess about how the two mechanisms compose.
+def test_functions_are_two_real_separate_images_not_one_shared_image():
+    # Real, deliberate change from this stack's earlier design (one shared image + a CMD
+    # override per function): interpret() dropped its climate_pipeline data dependency entirely
+    # (ADR-004's restored decision — it returns identifiers only), so its image no longer needs
+    # xarray/netCDF4/numpy at all — confirmed live, its handler imports in ~114ms with only
+    # boto3+httpx installed. A shared image would mean interpret()'s cold start still paid for
+    # narrate()'s real, separate dependency (narrate() still does real server-side lookups for
+    # its verification gate). Two distinct Dockerfiles now (api/Dockerfile,
+    # api/Dockerfile.narrate) means two distinct built images — this is the real regression guard
+    # that they didn't quietly end up sharing one again.
     import json as _json
 
     resources = _template().to_json()["Resources"]
     fns = [r for r in resources.values() if r["Type"] == "AWS::Lambda::Function"]
     image_uris = {_json.dumps(fn["Properties"]["Code"]["ImageUri"], sort_keys=True) for fn in fns}
-    assert len(image_uris) == 1
+    assert len(image_uris) == 2
 
-    commands = {tuple(fn["Properties"]["ImageConfig"]["Command"]) for fn in fns}
-    assert commands == {("lambda_handler.interpret_lambda_handler",), ("lambda_handler.narrate_lambda_handler",)}
+    # No CMD override needed anymore — each Dockerfile bakes in its own real handler.
+    for fn in fns:
+        assert "ImageConfig" not in fn["Properties"]
 
 
 def test_creates_a_rest_api_with_both_routes_nested_under_api():
