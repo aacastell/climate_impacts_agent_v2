@@ -1,3 +1,4 @@
+import json
 import shutil
 
 import numpy as np
@@ -39,6 +40,20 @@ class _FakeHttpClient:
         return _FakeResponse(self._response_body)
 
 
+def _reject_plain_floats(value, path="Item"):
+    """Mirrors the real, live-confirmed DynamoDB Table resource behavior: a plain Python float
+    anywhere in a put_item Item raises TypeError, not just at the top level. Without this, the
+    fake would silently accept exactly the shape that broke in production."""
+    if isinstance(value, float):
+        raise TypeError(f"Float types are not supported. Use Decimal types instead. (at {path})")
+    if isinstance(value, dict):
+        for k, v in value.items():
+            _reject_plain_floats(v, f"{path}.{k}")
+    if isinstance(value, list):
+        for i, v in enumerate(value):
+            _reject_plain_floats(v, f"{path}[{i}]")
+
+
 class _FakeSessionTable:
     """Minimal in-memory stand-in for the real DynamoDB Table resource — same
     get_item/put_item/delete_item(Key=...) surface, no AWS involved."""
@@ -51,6 +66,7 @@ class _FakeSessionTable:
         return {"Item": item} if item is not None else {}
 
     def put_item(self, Item):
+        _reject_plain_floats(Item)
         self.items[Item["query_id"]] = Item
 
     def delete_item(self, Key):
@@ -109,9 +125,17 @@ def test_interpret_returns_full_answer_when_understanding_resolves(tmp_path):
 
 
 def test_interpret_starts_a_session_on_clarify_and_returns_a_query_id():
+    # Real regression guard: a real trace (e.g. a geocode() candidate already seen this turn)
+    # contains plain Python floats — DynamoDB's Table resource rejects those natively ("Float
+    # types are not supported"), a bug only a real float in the trace would have caught.
     http_client = _FakeHttpClient({
         "kind": "clarify", "question": "Did you mean the Vietnamese Mekong Delta?",
-        "tool_use_id": "t1", "trace": [{"role": "user", "content": [{"text": "What about Mekong?"}]}],
+        "tool_use_id": "t1",
+        "trace": [
+            {"role": "user", "content": [{"text": "What about Mekong?"}]},
+            {"role": "assistant", "content": [{"toolUse": {"toolUseId": "t0", "name": "geocode", "input": {"region_text": "Mekong"}}}]},
+            {"role": "user", "content": [{"toolResult": {"toolUseId": "t0", "content": [{"json": {"candidates": [{"label": "Mekong Delta, VNM", "lon": 105.8, "lat": 10.0}]}}]}}]},
+        ],
     })
     session_table = _FakeSessionTable()
 
@@ -126,16 +150,24 @@ def test_interpret_starts_a_session_on_clarify_and_returns_a_query_id():
     assert stored["tool_use_id"] == "t1"
     assert stored["original_question"] == "What about Mekong?"
     assert stored["expires_at"] > 0
+    # Stored as a JSON string (see interpret()'s own comment on why), and it round-trips exactly.
+    assert isinstance(stored["trace"], str)
+    round_tripped = json.loads(stored["trace"])
+    candidate = round_tripped[2]["content"][0]["toolResult"]["content"][0]["json"]["candidates"][0]
+    assert candidate["lon"] == 105.8
 
 
 def test_interpret_resumes_a_session_by_appending_the_answer_as_a_tool_result():
     session_table = _FakeSessionTable()
     session_table.put_item(Item={
         "query_id": "abc123",
-        "trace": [
+        # Stored as a JSON string, matching the real write path — see interpret()'s own comment:
+        # DynamoDB's Table resource rejects plain float anywhere in a nested Item, which a real
+        # trace (real geocode() lon/lat) would contain.
+        "trace": json.dumps([
             {"role": "user", "content": [{"text": "What about Mekong?"}]},
             {"role": "assistant", "content": [{"toolUse": {"toolUseId": "t1", "name": "clarify", "input": {"question": "Which one?"}}}]},
-        ],
+        ]),
         "tool_use_id": "t1",
         "original_question": "What about Mekong?",
         "expires_at": 9999999999,

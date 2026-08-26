@@ -23,28 +23,34 @@ def _template() -> Template:
     return Template.from_stack(stack)
 
 
-def test_creates_two_fargate_services():
-    _template().resource_count_is("AWS::ECS::Service", 2)
+def test_creates_three_fargate_services():
+    # understanding(), narration(), and the real self-hosted MLflow tracking server.
+    _template().resource_count_is("AWS::ECS::Service", 3)
 
 
-def test_both_services_run_on_arm64_matching_the_locally_built_image():
+def test_all_three_services_run_on_arm64_matching_the_locally_built_image():
     # Real bug caught live: cdk deploy builds Docker images locally — on an Apple Silicon Mac
     # that's ARM64 — but Fargate defaults to x86_64, which failed with a real "exec format
     # error" at container start despite a clean image build and push.
     resources = _template().to_json()["Resources"]
     task_defs = [r for r in resources.values() if r["Type"] == "AWS::ECS::TaskDefinition"]
-    assert len(task_defs) == 2
+    assert len(task_defs) == 3
     for task_def in task_defs:
         assert task_def["Properties"]["RuntimePlatform"]["CpuArchitecture"] == "ARM64"
 
 
-def test_both_services_override_the_blocked_default_model():
+def test_understanding_and_narration_override_the_blocked_default_model():
     # Real bug caught before it shipped: both app.py files default to Claude Haiku, which is
     # rejected outright by Bedrock on this account (unsubmitted Anthropic use-case form,
     # confirmed live). Without an override here, a fully successful deploy would still fail on
     # every real query. Nova Pro needs no such form and was already validated live.
+    # Excludes the MLflow task definition deliberately — that service never calls Bedrock at
+    # all, so it has no *_MODEL_ID to override.
     resources = _template().to_json()["Resources"]
-    task_defs = [r for r in resources.values() if r["Type"] == "AWS::ECS::TaskDefinition"]
+    task_defs = [
+        r for key, r in resources.items()
+        if r["Type"] == "AWS::ECS::TaskDefinition" and (key.startswith("UnderstandingService") or key.startswith("NarrationService"))
+    ]
     assert len(task_defs) == 2
     for task_def in task_defs:
         env = {e["Name"]: e["Value"] for e in task_def["Properties"]["ContainerDefinitions"][0]["Environment"]}
@@ -54,19 +60,53 @@ def test_both_services_override_the_blocked_default_model():
             assert "anthropic" not in env[key], f"{key} still points at the blocked Claude Haiku default"
 
 
-def test_narration_service_has_a_working_mlflow_backend_configured():
-    # Real bug caught before it shipped: narration_service had no environment block at all —
-    # eval_capture.py's mlflow.start_run() would have used MLflow's local-file default, which
-    # the installed MLflow version refuses to initialize without MLFLOW_ALLOW_FILE_STORE
-    # (confirmed live earlier this session), crashing every /narrate call on the logging step
-    # after the real work was already done.
+def test_narration_service_points_at_the_real_mlflow_server_not_a_local_sqlite_path():
+    # Real fix: narration_service used to point at an ephemeral sqlite file inside its own
+    # container (worked, but no UI, no external access, wiped on every restart). It should now
+    # point at the real MlflowService's ALB, over http, not a sqlite:// path.
     resources = _template().to_json()["Resources"]
     narration_task_def = next(
         r for key, r in resources.items() if r["Type"] == "AWS::ECS::TaskDefinition" and key.startswith("NarrationService")
     )
     env = {e["Name"]: e["Value"] for e in narration_task_def["Properties"]["ContainerDefinitions"][0]["Environment"]}
     assert "MLFLOW_TRACKING_URI" in env
-    assert env["MLFLOW_TRACKING_URI"] != ""
+    tracking_uri = env["MLFLOW_TRACKING_URI"]
+    assert isinstance(tracking_uri, dict), "expected a CDK token (Fn::Join to the MLflow ALB DNS name), not a literal string"
+
+
+def test_langfuse_credentials_come_from_secrets_manager_not_plaintext_env():
+    # A Langfuse secret key is real sensitive material — it belongs in Secrets Manager, not
+    # baked in plaintext into the CloudFormation template the way a plain environment={} value
+    # would be. Checked on both services: understanding() and narration() both trace via
+    # Langfuse (see their real @observe-decorated functions).
+    _template().resource_count_is("AWS::SecretsManager::Secret", 1)
+    resources = _template().to_json()["Resources"]
+    task_defs = [
+        r for key, r in resources.items()
+        if r["Type"] == "AWS::ECS::TaskDefinition" and (key.startswith("UnderstandingService") or key.startswith("NarrationService"))
+    ]
+    assert len(task_defs) == 2
+    for task_def in task_defs:
+        secrets = task_def["Properties"]["ContainerDefinitions"][0].get("Secrets", [])
+        secret_names = {s["Name"] for s in secrets}
+        assert secret_names == {"LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY"}
+        env_names = {e["Name"] for e in task_def["Properties"]["ContainerDefinitions"][0]["Environment"]}
+        assert "LANGFUSE_PUBLIC_KEY" not in env_names, "Langfuse key leaked into plaintext environment"
+        assert "LANGFUSE_SECRET_KEY" not in env_names, "Langfuse key leaked into plaintext environment"
+
+
+def test_mlflow_service_has_a_persistent_efs_volume():
+    # Real reason this exists at all: without a persistent volume, MLflow's sqlite backend
+    # would live on the container's own ephemeral filesystem and lose every run on restart —
+    # the same problem this whole service replaces, just moved one layer down.
+    _template().resource_count_is("AWS::EFS::FileSystem", 1)
+    resources = _template().to_json()["Resources"]
+    mlflow_task_def = next(
+        r for key, r in resources.items() if r["Type"] == "AWS::ECS::TaskDefinition" and key.startswith("MlflowTaskDefinition")
+    )
+    volumes = mlflow_task_def["Properties"].get("Volumes", [])
+    assert len(volumes) == 1
+    assert "EFSVolumeConfiguration" in volumes[0]
 
 
 def test_no_nat_gateway():
@@ -75,7 +115,7 @@ def test_no_nat_gateway():
     assert not any(r["Type"] == "AWS::EC2::NatGateway" for r in resources.values())
 
 
-def test_both_services_assign_public_ip():
+def test_all_three_services_assign_public_ip():
     """Real regression guard for a real, live-caught deploy failure: a NAT-less public subnet
     doesn't grant a Fargate task internet access on its own — without AssignPublicIp explicitly
     ENABLED, tasks couldn't reach ECR to pull their image at all. The first real `cdk deploy`
@@ -83,7 +123,7 @@ def test_both_services_assign_public_ip():
     created — the container never started, not a crash after starting)."""
     resources = _template().to_json()["Resources"]
     services = [r for r in resources.values() if r["Type"] == "AWS::ECS::Service"]
-    assert len(services) == 2
+    assert len(services) == 3
     for service in services:
         assert service["Properties"]["NetworkConfiguration"]["AwsvpcConfiguration"]["AssignPublicIp"] == "ENABLED"
 

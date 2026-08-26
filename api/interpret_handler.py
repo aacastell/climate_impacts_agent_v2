@@ -18,6 +18,7 @@ pending clarify call's toolResult (a real Bedrock Converse requirement, not a st
 orchestrator.interpret()'s docstring) and continuing the same conversation.
 """
 
+import json
 import os
 import time
 import uuid
@@ -87,7 +88,13 @@ def interpret(s3, bucket: str, work_dir, http_client, question: str, *, session_
         item = session_table.get_item(Key={"query_id": query_id}).get("Item")
         if item is None:
             return _refusal("session_expired", "This clarification session has expired or wasn't found — please ask your question again.")
-        trace = item["trace"]
+        # Stored as a JSON string, not a native DynamoDB nested structure — real bug caught live:
+        # boto3's Table resource rejects plain Python float anywhere in a nested Item (region
+        # lon/lat from a real geocode() result, in this case) with "Float types are not
+        # supported. Use Decimal types instead." Recursively converting every float in an
+        # arbitrarily-nested Bedrock message trace to Decimal is exactly the kind of fragile
+        # workaround worth avoiding — a plain string sidesteps DynamoDB's type system entirely.
+        trace = json.loads(item["trace"])
         trace.append({"role": "user", "content": [{"toolResult": {"toolUseId": item["tool_use_id"], "content": [{"text": answer}]}}]})
         original_question = item["original_question"]
         request_body = {"question": original_question, "trace": trace}
@@ -107,7 +114,7 @@ def interpret(s3, bucket: str, work_dir, http_client, question: str, *, session_
         active_query_id = query_id if query_id is not None else str(uuid.uuid4())
         session_table.put_item(Item={
             "query_id": active_query_id,
-            "trace": understanding_result["trace"],
+            "trace": json.dumps(understanding_result["trace"]),
             "tool_use_id": understanding_result["tool_use_id"],
             "original_question": original_question,
             "expires_at": int(time.time()) + SESSION_TTL_SECONDS,
