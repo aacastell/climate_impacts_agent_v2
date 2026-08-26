@@ -5,25 +5,14 @@ import type { GeoJSONSource } from "maplibre-gl";
 import type { Feature, FeatureCollection } from "geojson";
 import "maplibre-gl/dist/maplibre-gl.css";
 import maplibreWorkerUrl from "maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url";
-import type { ExpressionSpecification, StyleSpecification } from "@maplibre/maplibre-gl-style-spec";
+import type { StyleSpecification } from "@maplibre/maplibre-gl-style-spec";
 import type { MapCenter, GridPatch } from "../api/types";
+import type { ColorScale } from "../colorScales";
+import { colorAt, cssGradient, mapLibreFillExpression } from "../colorScales";
 import "./ResultMap.css";
 
 const GRID_SOURCE_ID = "indicator-grid";
 const GRID_LAYER_ID = "indicator-grid-fill";
-
-// Same amber-to-red hue sweep as markerColor() below, expressed as a MapLibre paint expression
-// so the region shading and the center marker always read as one consistent color language, not
-// two different scales that happen to share a name.
-const GRID_FILL_COLOR: ExpressionSpecification = [
-  "interpolate",
-  ["linear"],
-  ["get", "norm"],
-  0,
-  "hsl(40, 85%, 45%)",
-  1,
-  "hsl(0, 85%, 45%)",
-];
 
 const EMPTY_FEATURE_COLLECTION: FeatureCollection = { type: "FeatureCollection", features: [] };
 
@@ -33,20 +22,10 @@ const EMPTY_FEATURE_COLLECTION: FeatureCollection = { type: "FeatureCollection",
 // the grid's own real spacing; a cell with no real data (grid.values[i][j] === null — ocean, or
 // land the source dataset itself masks out) is skipped entirely, not filled with a guessed color.
 //
-// `norm` is 0–1 *within this one patch* (local min/max), not against a fixed global scale — the
-// same value would shade differently across two different queries. That's a deliberate choice:
-// this map's job is to show real spatial *variation* around the resolved point, which a
-// query-spanning fixed scale would wash out for any query where the whole patch sits far from
-// that scale's assumed range (e.g. a mild query would render as a flat, uninformative color under
-// a scale calibrated for extreme cases).
+// Only the real value is carried as a feature property — no precomputed normalization here.
+// Color comes from the caller's own ColorScale (colorScales.ts), applied via a MapLibre paint
+// expression (see the grid-paint effect below), so this function has one job: real geometry.
 function buildGridGeoJson(grid: GridPatch): FeatureCollection {
-  const realValues = grid.values.flat().filter((v): v is number => v !== null);
-  if (realValues.length === 0) return EMPTY_FEATURE_COLLECTION;
-
-  const min = Math.min(...realValues);
-  const max = Math.max(...realValues);
-  const span = max - min || 1; // every real cell identical (or only one) — avoid a divide-by-zero, not a real edge case to over-think
-
   // Real ISIMIP resolution is 0.5°; falls back to that when a patch is too narrow (1 distinct
   // lon or lat, e.g. a small radius_deg or a fixture in a test) to measure its own spacing.
   const lonStep = grid.lons.length > 1 ? Math.abs(grid.lons[1] - grid.lons[0]) : 0.5;
@@ -61,7 +40,7 @@ function buildGridGeoJson(grid: GridPatch): FeatureCollection {
       if (value === null || value === undefined) return;
       features.push({
         type: "Feature",
-        properties: { value, norm: (value - min) / span },
+        properties: { value },
         geometry: {
           type: "Polygon",
           coordinates: [
@@ -127,13 +106,42 @@ const BASE_STYLE: StyleSpecification = {
   ],
 };
 
+// Compact, human-readable — full float precision would clutter a legend that only needs to
+// orient the reader to roughly what a color means, not report an exact figure (the header's own
+// valueLabel already does that for the resolved point).
+function formatLegendValue(value: number): string {
+  const rounded = Math.abs(value) >= 10 ? Math.round(value) : Math.round(value * 10) / 10;
+  return `${rounded >= 0 && value !== 0 ? "+" : ""}${rounded}`;
+}
+
+function Legend({ scale, unit }: { scale: ColorScale; unit: string }) {
+  const min = scale.stops[0].value;
+  const max = scale.stops[scale.stops.length - 1].value;
+  const mid = scale.stops.length === 3 ? scale.stops[1].value : null;
+  return (
+    <div className="result-map-legend">
+      <div className="result-map-legend-bar" style={{ background: cssGradient(scale) }} />
+      <div className="result-map-legend-labels">
+        <span>{formatLegendValue(min)}{unit}</span>
+        {mid !== null && <span className="result-map-legend-mid">{formatLegendValue(mid)}{unit}</span>}
+        <span>{formatLegendValue(max)}{unit}</span>
+      </div>
+    </div>
+  );
+}
+
 interface ResultMapProps {
   title: string;
   center: MapCenter;
   zoom: number;
-  /** 0 (least severe) to 1 (most severe), used only for the marker color. */
-  intensity: number;
+  /** The resolved point's own real value — colors the center marker via `colorScale`, and labels
+   * the header alongside `valueLabel`. */
+  value: number;
+  unit: string;
   valueLabel: string;
+  /** Real, per-indicator color language (colorScales.ts) — drives the marker, the grid shading,
+   * and the legend, all from the same real domain, so none of the three can disagree. */
+  colorScale: ColorScale;
   /** Real precomputed neighboring cells around `center` — renders as region shading, not just
    * the single dot. Optional so a caller with no grid data yet (or none at all) still renders a
    * valid map, same as before this existed. */
@@ -142,14 +150,7 @@ interface ResultMapProps {
   toggle?: ReactNode;
 }
 
-function markerColor(intensity: number): string {
-  const clamped = Math.max(0, Math.min(1, intensity));
-  // Amber to red: consistent with "more severe" reading as "more saturated red."
-  const hue = 40 - clamped * 40;
-  return `hsl(${hue}, 85%, 45%)`;
-}
-
-export function ResultMap({ title, center, zoom, intensity, valueLabel, grid, toggle }: ResultMapProps) {
+export function ResultMap({ title, center, zoom, value, unit, valueLabel, colorScale, grid, toggle }: ResultMapProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
   const markerRef = useRef<Marker | null>(null);
@@ -160,10 +161,12 @@ export function ResultMap({ title, center, zoom, intensity, valueLabel, grid, to
   const isMapLoadedRef = useRef(false);
   // Kept current on every render (not just via the grid-effect below) so the "load" handler —
   // which fires asynchronously and can land after several renders have already happened — always
-  // has the real, latest grid to apply on its one-shot initial setData, not whatever `grid` was
-  // at the moment the map was first constructed.
+  // has the real, latest grid/scale to apply on its one-shot initial setup, not whatever they
+  // were at the moment the map was first constructed.
   const latestGridRef = useRef(grid);
   latestGridRef.current = grid;
+  const latestColorScaleRef = useRef(colorScale);
+  latestColorScaleRef.current = colorScale;
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -185,7 +188,10 @@ export function ResultMap({ title, center, zoom, intensity, valueLabel, grid, to
         id: GRID_LAYER_ID,
         type: "fill",
         source: GRID_SOURCE_ID,
-        paint: { "fill-color": GRID_FILL_COLOR, "fill-opacity": 0.55 },
+        paint: {
+          "fill-color": mapLibreFillExpression(latestColorScaleRef.current),
+          "fill-opacity": 0.55,
+        },
       });
       isMapLoadedRef.current = true;
     });
@@ -210,18 +216,22 @@ export function ResultMap({ title, center, zoom, intensity, valueLabel, grid, to
     markerRef.current?.remove();
     const el = document.createElement("div");
     el.className = "result-map-marker";
-    el.style.backgroundColor = markerColor(intensity);
+    el.style.backgroundColor = colorAt(colorScale, value);
     markerRef.current = new Marker({ element: el })
       .setLngLat([center.lon, center.lat])
       .addTo(map);
-  }, [center.lon, center.lat, zoom, intensity]);
+  }, [center.lon, center.lat, zoom, value, colorScale]);
 
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !isMapLoadedRef.current) return;
     const source = map.getSource(GRID_SOURCE_ID) as GeoJSONSource | undefined;
     source?.setData(grid ? buildGridGeoJson(grid) : EMPTY_FEATURE_COLLECTION);
-  }, [grid]);
+    // A different indicator (different colorScale) needs the grid layer's own paint expression
+    // updated too, not just the source data — the previous indicator's domain/palette would
+    // otherwise silently keep coloring the new one's cells.
+    map.setPaintProperty(GRID_LAYER_ID, "fill-color", mapLibreFillExpression(colorScale));
+  }, [grid, colorScale]);
 
   return (
     <div className="result-map">
@@ -230,6 +240,7 @@ export function ResultMap({ title, center, zoom, intensity, valueLabel, grid, to
         <h3>{title}</h3>
         <span className="result-map-value">{valueLabel}</span>
       </div>
+      <Legend scale={colorScale} unit={unit} />
       {toggle}
     </div>
   );

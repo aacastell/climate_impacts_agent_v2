@@ -46,3 +46,27 @@
   border: 2px solid white;
   box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35);
 }
+
+.result-map-legend {
+  padding: 0 0.85rem 0.65rem;
+}
+
+.result-map-legend-bar {
+  height: 8px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+}
+
+.result-map-legend-labels {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  margin-top: 0.2rem;
+}
+
+.result-map-legend-mid {
+  /* Sits between the min/max labels via flex's space-between (a 3-span uses the same rule as a
+     2-span; the middle child just lands in between) — no extra positioning needed. */
+  text-align: center;
+}

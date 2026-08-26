@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { apiClient } from "./api";
-import type { ClimateIndicatorId, ClimateIndicatorPayload, NarrationResult, QueryAnswer, QueryClarify, QueryResponse } from "./api/types";
+import type { ClimateIndicatorId, NarrationResult, QueryAnswer, QueryClarify, QueryResponse } from "./api/types";
 import { QueryForm } from "./components/QueryForm";
 import { ResultMap } from "./components/ResultMap";
 import { IndicatorToggle } from "./components/IndicatorToggle";
@@ -8,32 +8,21 @@ import { NarrationPanel } from "./components/NarrationPanel";
 import { ClarifyPrompt } from "./components/ClarifyPrompt";
 import { RefusalNotice } from "./components/RefusalNotice";
 import { ProvenanceFooter } from "./components/ProvenanceFooter";
+import { colorScaleForIndicator, colorScaleForYield, gridDomain, gridMaxAbs } from "./colorScales";
 import "./App.css";
 
-// Yield changes rarely exceed ±40% at the warming levels this system
-// covers; used only to scale the sector map marker color, not displayed.
-const SECTOR_INTENSITY_SCALE = 40;
-
-// Per-indicator scale used only to map a value onto the 0–1 marker-color
-// range — each indicator has a different plausible magnitude, so one shared
-// scale (as when there was only one climate indicator) no longer works.
-// useAbs: severity reads as "how far from zero," not "which direction" —
-// true for indicators where either direction can be the concerning one.
-const INDICATOR_INTENSITY: Record<ClimateIndicatorId, { scale: number; useAbs?: boolean }> = {
-  temp_change: { scale: 5 },
-  // mm/day change is typically a small number — 3mm as a plausible-magnitude visualization
-  // scale, same rough-estimate basis as every other value in this table, not derived from data.
-  precip_change_abs: { scale: 3, useAbs: true },
-  precip_change_pct: { scale: 25, useAbs: true },
-  consecutive_dry_days: { scale: 25 },
-  extreme_heat_days: { scale: 40 },
+// Fallback domains for callers with no real grid (MockApiClient, PrecomputedApiClient — see
+// types.ts's own comment on why `grid` is optional) — real magnitude estimates, same basis as
+// the scale table this replaced, used only so the marker still gets a sensible color without a
+// real spatial patch to derive one from.
+const FALLBACK_DOMAIN: Record<ClimateIndicatorId, [number, number]> = {
+  temp_change: [0, 5],
+  precip_change_abs: [-3, 3],
+  precip_change_pct: [-25, 25],
+  consecutive_dry_days: [0, 25],
+  extreme_heat_days: [0, 40],
 };
-
-function indicatorIntensity(indicator: ClimateIndicatorPayload): number {
-  const { scale, useAbs } = INDICATOR_INTENSITY[indicator.id];
-  const magnitude = useAbs ? Math.abs(indicator.value) : indicator.value;
-  return magnitude / scale;
-}
+const FALLBACK_YIELD_MAX_ABS = 40;
 
 function formatSigned(value: number, unit: string): string {
   return `${value >= 0 ? "+" : ""}${value}${unit}`;
@@ -108,6 +97,16 @@ function App() {
       answer.climateMap.indicators[0])
     : null;
 
+  const climateColorScale = selectedIndicator
+    ? colorScaleForIndicator(
+        selectedIndicator.id,
+        (selectedIndicator.grid && gridDomain(selectedIndicator.grid)) || FALLBACK_DOMAIN[selectedIndicator.id],
+      )
+    : null;
+  const yieldColorScale = answer
+    ? colorScaleForYield(answer.sectorMap.grid ? gridMaxAbs(answer.sectorMap.grid) : FALLBACK_YIELD_MAX_ABS)
+    : null;
+
   return (
     <div className="app">
       <header className="app-header">
@@ -132,7 +131,7 @@ function App() {
         />
       )}
 
-      {answer && selectedIndicator && (
+      {answer && selectedIndicator && climateColorScale && yieldColorScale && (
         <div className="app-results">
           <div className="app-interpretation">
             Showing <strong>{answer.interpretation.crop.replaceAll("_", " ")}</strong> in{" "}
@@ -145,7 +144,9 @@ function App() {
               title={selectedIndicator.title}
               center={answer.climateMap.center}
               zoom={answer.climateMap.zoom}
-              intensity={indicatorIntensity(selectedIndicator)}
+              value={selectedIndicator.value}
+              unit={selectedIndicator.unit}
+              colorScale={climateColorScale}
               valueLabel={formatSigned(selectedIndicator.value, selectedIndicator.unit)}
               grid={selectedIndicator.grid}
               toggle={
@@ -160,7 +161,9 @@ function App() {
               title={answer.sectorMap.title}
               center={answer.sectorMap.center}
               zoom={answer.sectorMap.zoom}
-              intensity={Math.abs(answer.sectorMap.value) / SECTOR_INTENSITY_SCALE}
+              value={answer.sectorMap.value}
+              unit={answer.sectorMap.unit}
+              colorScale={yieldColorScale}
               valueLabel={formatSigned(answer.sectorMap.value, answer.sectorMap.unit)}
               grid={answer.sectorMap.grid}
             />
