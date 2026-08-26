@@ -13,12 +13,17 @@ precomputed field-window file is already a single reduced (lat, lon) grid with n
 at all (see process/run.py's _write_field_window), so no windowing/time logic is needed at
 query time, only a plain nearest-cell read.
 
-Only the single-scalar path lives here now — a real, deliberate reduction, not an oversight.
-narrate_handler.py still calls lookup_value() for its own real server-side verification-gate
-lookups (ADR-004 Step 4). Grid extraction (a spatial neighborhood, not one cell) used to live
-here too but moved client-side (frontend/src/precomputedFetch.ts) when ADR-004's actual decision
-— the query API never computes or extracts shading values — was restored after a real, later-
-acknowledged drift.
+The single-scalar path (lookup_value) is the real, deliberate reduction narrate_handler.py uses
+for the narration evidence numbers themselves (ADR-004 Step 4). Grid extraction (a spatial
+neighborhood, not one cell) used to live here too, moved client-side
+(frontend/src/precomputedFetch.ts) when ADR-004's actual decision — the query API never computes
+or extracts shading values for map rendering — was restored after a real, later-acknowledged
+drift. grid_patch()/lookup_grid() below are a real, distinct reintroduction, not a revert of that
+restoration: they exist for the narration verification gate's driver co-variation check
+(docs/adr/adr-007-narration-verification-gate.md's Update; see
+pipeline/climate_pipeline/process/covariation.py), a real caller that didn't exist when the
+original versions were removed as dead code. Nothing about this reopens map rendering going
+through the API — the frontend still fetches and parses precomputed files itself.
 """
 
 from pathlib import Path
@@ -26,6 +31,11 @@ from pathlib import Path
 import xarray as xr
 
 from climate_pipeline.process.field_names import FIELD_VARIANTS, output_field_name
+
+# Same real-world-meaningful box the frontend uses client-side (frontend/src/precomputedFetch.ts's
+# GRID_RADIUS_DEG) — not an arbitrary pixel count, and kept identical so a server-side patch and
+# the client-side patch for the same query cover the same cells.
+GRID_RADIUS_DEG = 2.0
 
 
 def field_window_key(base_field: str, kind: str, year: int) -> str:
@@ -67,3 +77,30 @@ def lookup_value(s3, bucket: str, base_field: str, kind: str, year: int, lon: fl
         raise ValueError(f"{base_field!r} has no {kind!r} variant — valid kinds: {FIELD_VARIANTS[base_field]}")
     path = download_field_window(s3, bucket, base_field, kind, year, work_dir)
     return nearest_cell_value(path, base_field, kind, lon, lat)
+
+
+def grid_patch(path: Path, base_field: str, kind: str, lon: float, lat: float, radius_deg: float = GRID_RADIUS_DEG) -> xr.DataArray:
+    """The box of grid cells within radius_deg of (lon, lat) — the server-side counterpart to
+    frontend/src/precomputedFetch.ts's own box-patch fetch. Needed here for the narration
+    verification gate's driver co-variation check, which has to compare several fields over the
+    same region's cells at once, not render one. Returns a real xr.DataArray (lat, lon dims),
+    NaNs intact — see process/covariation.py for the masking/correlation step."""
+    output_field = output_field_name(base_field, kind)
+    with xr.open_dataset(path) as ds:
+        patch = ds[output_field].where(
+            (abs(ds["lat"] - lat) <= radius_deg) & (abs(ds["lon"] - lon) <= radius_deg), drop=True
+        )
+        return patch.load()
+
+
+def lookup_grid(
+    s3, bucket: str, base_field: str, kind: str, year: int, lon: float, lat: float, work_dir: Path, radius_deg: float = GRID_RADIUS_DEG
+) -> xr.DataArray:
+    """The end-to-end grid-patch counterpart to lookup_value(): (field, kind, year, region point)
+    -> the precomputed change grid within radius_deg of that point. Reuses lookup_value's own
+    local download cache — download_field_window() is keyed identically for both, so calling both
+    for the same (field, kind, year) never downloads the object twice."""
+    if kind not in FIELD_VARIANTS[base_field]:
+        raise ValueError(f"{base_field!r} has no {kind!r} variant — valid kinds: {FIELD_VARIANTS[base_field]}")
+    path = download_field_window(s3, bucket, base_field, kind, year, work_dir)
+    return grid_patch(path, base_field, kind, lon, lat, radius_deg)

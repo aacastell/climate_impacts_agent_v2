@@ -27,16 +27,21 @@ def narrate(
     warming_level_c: float,
     climate_evidence: dict,
     yield_change_pct: float,
+    driver_covariation: dict,
 ) -> dict:
-    """climate_evidence and literature go into generation; yield_change_pct never does — it's
-    introduced only at the verification step (see module docstring). Returns:
-    {"narration": str, "verification": {...}, "status": "PASS" | "SCIENTIFIC_DISAGREEMENT",
-     "attempts": int, "literature": [...]}
+    """climate_evidence and literature go into generation; yield_change_pct and
+    driver_covariation never do — both are introduced only at the verification step (see module
+    docstring). Pass {} when the caller has no region-cell data for this query (e.g. a region too
+    small to have computed anything) — covariation_check's own "nothing confident enough to
+    check" path handles that explicitly, so this is a real input, not an optional convenience.
+    Returns: {"narration": str, "verification": {...}, "status": "PASS" | "SCIENTIFIC_DISAGREEMENT",
+     "attempts": int, "literature": [...], "number_guard": {...}, "covariation_result": {...}}
     """
     literature = retrieve_fn(f"heat and water stress effects on {crop_label} yield")
 
     final_state = run_narration_graph(
-        model_client, region_name, crop_label, warming_level_c, climate_evidence, yield_change_pct, literature
+        model_client, region_name, crop_label, warming_level_c, climate_evidence, yield_change_pct,
+        literature, driver_covariation,
     )
 
     return {
@@ -45,4 +50,6 @@ def narrate(
         "status": final_state["status"],
         "attempts": final_state["attempt"],
         "literature": literature,
+        "number_guard": final_state["number_guard"],
+        "covariation_result": final_state["covariation_result"],
     }

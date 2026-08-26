@@ -30,6 +30,15 @@ _VERIFICATION_TOOL = [
                         "contradictions": {"type": "array", "items": {"type": "string"}},
                         "confidence": {"type": "number"},
                         "notes": {"type": "string"},
+                        "mechanism_consistent": {
+                            "type": "boolean",
+                            "description": (
+                                "Only judge this when the prompt provides a top-covariation driver. "
+                                "False if the narration attributes the impact to a clearly different, "
+                                "unrelated mechanism than that driver. Omit entirely if the prompt "
+                                "gives no driver to check against."
+                            ),
+                        },
                     },
                     "required": ["result", "direction_match", "unsupported_claims", "contradictions", "confidence"],
                 }

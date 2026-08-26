@@ -41,17 +41,25 @@ class ClimateEvidence(BaseModel):
     consecutive_dry_days: float
 
 
+class DriverCovariation(BaseModel):
+    r: float | None
+    cell_count: int
+    low_confidence: bool
+
+
 class NarrateRequest(BaseModel):
     region_name: str
     crop_label: str
     warming_level_c: float
     climate_evidence: ClimateEvidence
     yield_change_pct: float
+    driver_covariation: dict[str, DriverCovariation]
 
 
 @app.post("/narrate")
 def narrate_endpoint(request: NarrateRequest) -> dict:
     climate_evidence = request.climate_evidence.model_dump()
+    driver_covariation = {name: info.model_dump() for name, info in request.driver_covariation.items()}
     result = narrate(
         _model_client,
         _retrieve_fn,
@@ -60,6 +68,7 @@ def narrate_endpoint(request: NarrateRequest) -> dict:
         request.warming_level_c,
         climate_evidence,
         request.yield_change_pct,
+        driver_covariation,
     )
     # Every call, not just SCIENTIFIC_DISAGREEMENT ones — PASS cases are the denominator any
     # later accuracy metric needs (see eval_capture.py). Wrapped: eval/observability logging is
@@ -67,7 +76,10 @@ def narrate_endpoint(request: NarrateRequest) -> dict:
     # MLflow backend being unreachable) must never turn an already-successful narration into a
     # 500 the caller never sees the actual result for.
     try:
-        capture(result, request.region_name, request.crop_label, request.warming_level_c, climate_evidence, request.yield_change_pct)
+        capture(
+            result, request.region_name, request.crop_label, request.warming_level_c,
+            climate_evidence, request.yield_change_pct, driver_covariation,
+        )
     except Exception:
         logger.exception("eval_capture.capture() failed — narration result is still returned")
     return result

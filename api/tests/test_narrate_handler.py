@@ -71,6 +71,17 @@ def test_narrate_independently_rederives_evidence_and_calls_the_narration_servic
     assert sent["region_name"] == "Iowa"
     assert sent["climate_evidence"]["temp_change_c"] == 1.8
     assert sent["yield_change_pct"] == -12.3
+    # The fixture's own 2x2 grid only has one cell within GRID_RADIUS_DEG of (LON, LAT) — see
+    # _write_field_fixture — so every driver's real cell_count here is 1, correctly reported as
+    # low_confidence rather than a fabricated statistic. Real, buildable multi-cell correlation
+    # math is covered directly against synthetic grids in
+    # pipeline/tests/test_process_covariation.py; this test only proves narrate_handler wires the
+    # grid fetch and covariation call through to the outgoing payload at all.
+    assert set(sent["driver_covariation"].keys()) == {
+        "temp_change_c", "precip_change_pct", "extreme_heat_days", "consecutive_dry_days",
+    }
+    assert sent["driver_covariation"]["temp_change_c"]["cell_count"] == 1
+    assert sent["driver_covariation"]["temp_change_c"]["low_confidence"] is True
 
 
 def test_narrate_is_a_pure_function_needing_only_the_interpretation(tmp_path):

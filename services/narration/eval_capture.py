@@ -15,12 +15,29 @@ version (not assumed from older docs): the plain filesystem backend (a bare "./m
 now in maintenance mode and refuses to initialize at all unless MLFLOW_ALLOW_FILE_STORE is
 explicitly set — MLFLOW_TRACKING_URI needs to be a real database backend (e.g.
 "sqlite:///mlflow.db") to work today, not a plain local path.
+
+Extended for the number-guard and covariation-check nodes (graph.py) — logged as their own
+params/metrics, not just buried in the artifact JSON, specifically so report_verification_rates.py
+can query and slice by them directly (mlflow.search_runs filters/reads params and metrics without
+needing to open every run's artifact).
 """
 
 import mlflow
 
 
-def capture(narrate_result: dict, region_name: str, crop_label: str, warming_level_c: float, climate_evidence: dict, yield_change_pct: float) -> None:
+def capture(
+    narrate_result: dict,
+    region_name: str,
+    crop_label: str,
+    warming_level_c: float,
+    climate_evidence: dict,
+    yield_change_pct: float,
+    driver_covariation: dict,
+) -> None:
+    number_guard = narrate_result.get("number_guard") or {}
+    covariation_result = narrate_result.get("covariation_result") or {}
+    verification = narrate_result["verification"]
+
     with mlflow.start_run(run_name=f"narrate-{region_name}-{crop_label}-{warming_level_c}C"):
         mlflow.log_params(
             {
@@ -29,20 +46,30 @@ def capture(narrate_result: dict, region_name: str, crop_label: str, warming_lev
                 "warming_level_c": warming_level_c,
                 "status": narrate_result["status"],
                 "attempts": narrate_result["attempts"],
-                "verification_result": narrate_result["verification"]["result"],
-                "direction_match": narrate_result["verification"].get("direction_match"),
-                "confidence": narrate_result["verification"].get("confidence"),
+                "verification_result": verification["result"],
+                "direction_match": verification.get("direction_match"),
+                "confidence": verification.get("confidence"),
+                "number_guard_passed": number_guard.get("passed"),
+                "covariation_checked": covariation_result.get("checked"),
+                "top_covariation_driver": covariation_result.get("top_driver"),
+                "mechanism_consistent": verification.get("mechanism_consistent"),
             }
         )
         mlflow.log_metric("attempts", narrate_result["attempts"])
         mlflow.log_metric("scientific_disagreement", 1 if narrate_result["status"] == "SCIENTIFIC_DISAGREEMENT" else 0)
+        mlflow.log_metric("unsupported_number_count", len(number_guard.get("unsupported_numbers", [])))
+        if covariation_result.get("top_r") is not None:
+            mlflow.log_metric("top_covariation_r", covariation_result["top_r"])
         mlflow.log_dict(
             {
                 "climate_evidence": climate_evidence,
                 "yield_change_pct": yield_change_pct,
+                "driver_covariation": driver_covariation,
                 "literature": narrate_result["literature"],
                 "narration": narrate_result["narration"],
-                "verification": narrate_result["verification"],
+                "verification": verification,
+                "number_guard": number_guard,
+                "covariation_result": covariation_result,
             },
             "eval_record.json",
         )

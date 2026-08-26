@@ -150,6 +150,48 @@ ahead of any evidence it's needed.
 
 ---
 
+## Update (2026-08-26): two deterministic checks added ahead of verify
+
+Real, disclosed gap this closes, not new scope invented for its own sake: the original verify
+step was an LLM judging direction/severity/unsupported-claims against the held-out yield number —
+real, but it left two things unchecked. (1) Nothing verified that a specific number appearing in
+generated narration text actually traced back to something generation was given — a fabricated
+figure that happened to be direction-consistent would still `PASS`. (2) Nothing gave the verifier
+a signal to check a narrated *mechanism* claim against — a narration citing the wrong driver
+(heat stress when the region's actual pattern tracks water stress) could be numerically correct,
+directionally correct, and still wrong in a way that matters for a mitigation recommendation.
+
+**Two new deterministic nodes now run between generate and verify** (`services/narration/graph.py`):
+
+- **`guard_numbers`** (`services/narration/number_guard.py`) — regex-extracts every numeric token
+  from the narration, checks each against the numbers generation was actually given (climate
+  evidence, retrieved literature, the warming level itself). Any number with no real source
+  triggers the same bounded retry as a verify `FAIL` — no LLM call spent confirming what a
+  deterministic check already caught.
+- **`covariation_check`** (`pipeline/climate_pipeline/process/covariation.py`) — for the queried
+  region, computes the Spearman correlation between each climate driver's per-cell grid and the
+  crop yield's per-cell grid (both already stored by the process stage as full grids, not
+  scalars — see `process/run.py`'s `_write_field_window`). This is a real, computable
+  co-variation signal, not causal proof, and is explicitly not trusted below
+  `MIN_CELLS_FOR_CONFIDENCE` region cells (the same small-n caution
+  `services/understanding/finetune/drift_stats.py`'s own statistical test already discloses). The top confident driver is given to the verifier, which
+  judges `mechanism_consistent` — matching a driver name to a narration's free-text mechanism
+  claim is a semantic call, not something a correlation coefficient decides on its own.
+
+**Still open, matching this ADR's original "verifier does not adjudicate" stance:** this signal
+narrows the mechanistic-attribution gap named in `review/mechanistic-attribution-boundary.md`; it
+does not close it. True causal (not just statistical) attribution — the longer-term path also
+named there — remains a separate, undone piece of work.
+
+**Tracking:** both checks are Langfuse-traced (`@observe(as_type="tool")`, matching how
+`orchestrator.py` already tags deterministic tool calls) for per-call diagnosis, and logged as
+their own MLflow params/metrics via `eval_capture.py` for aggregate reporting —
+`services/narration/report_verification_rates.py` is the real aggregation script this ADR's own
+Step 5 named as a gap: per-dimension pass rates (number provenance, mechanism consistency where
+judged, direction/severity), not one blended number.
+
+---
+
 ## Rejected options, summary
 
 | Option | Reason |

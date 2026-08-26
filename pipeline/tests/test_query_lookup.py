@@ -7,6 +7,8 @@ import xarray as xr
 from climate_pipeline.query.lookup import (
     download_field_window,
     field_window_key,
+    grid_patch,
+    lookup_grid,
     lookup_value,
     nearest_cell_value,
 )
@@ -97,6 +99,59 @@ def test_lookup_value_end_to_end(tmp_path):
 def test_lookup_value_rejects_an_invalid_kind_for_the_field(tmp_path):
     with pytest.raises(ValueError, match="percent"):
         lookup_value(
+            _FakeS3(tmp_path), "bucket", "tas", "percent", 2050, lon=0.0, lat=0.0, work_dir=tmp_path / "work"
+        )
+
+
+def _write_dense_fixture(path, output_field: str) -> None:
+    """5x5 grid, 1-degree spacing, centered on (0, 0) — dense enough that a real radius_deg box
+    filter captures a known, checkable sub-square rather than 0 or 1 cells."""
+    lats = [-2.0, -1.0, 0.0, 1.0, 2.0]
+    lons = [-2.0, -1.0, 0.0, 1.0, 2.0]
+    data = np.arange(25, dtype=float).reshape(5, 5)
+    ds = xr.DataArray(data, dims=["lat", "lon"], coords={"lat": lats, "lon": lons}).rename(output_field).to_dataset()
+    ds.to_netcdf(path)
+
+
+def test_grid_patch_keeps_only_cells_within_radius(tmp_path):
+    path = tmp_path / "y2050.nc"
+    _write_dense_fixture(path, "tas")
+
+    patch = grid_patch(path, "tas", "absolute", lon=0.0, lat=0.0, radius_deg=1.5)
+
+    # radius 1.5 around (0, 0) keeps lat/lon in {-1, 0, 1} -> a 3x3 sub-square, not the full 5x5.
+    assert patch.shape == (3, 3)
+    assert sorted(patch["lat"].values.tolist()) == [-1.0, 0.0, 1.0]
+    assert sorted(patch["lon"].values.tolist()) == [-1.0, 0.0, 1.0]
+
+
+def test_grid_patch_shrinks_to_one_cell_at_zero_radius(tmp_path):
+    path = tmp_path / "y2050.nc"
+    _write_dense_fixture(path, "tas")
+
+    patch = grid_patch(path, "tas", "absolute", lon=0.0, lat=0.0, radius_deg=0.0)
+
+    assert patch.shape == (1, 1)
+    assert float(patch.values[0, 0]) == 12.0  # center cell, index (2, 2) of the 5x5 arange grid
+
+
+def test_lookup_grid_end_to_end_reuses_lookup_values_own_download_cache(tmp_path):
+    remote_dir = tmp_path / "remote"
+    remote_dir.mkdir()
+    _write_dense_fixture(remote_dir / "y2050.nc", "tas")
+    s3 = _FakeS3(remote_dir)
+    work_dir = tmp_path / "work"
+
+    lookup_value(s3, "bucket", "tas", "absolute", 2050, lon=0.0, lat=0.0, work_dir=work_dir)
+    patch = lookup_grid(s3, "bucket", "tas", "absolute", 2050, lon=0.0, lat=0.0, work_dir=work_dir, radius_deg=1.5)
+
+    assert patch.shape == (3, 3)
+    assert s3.download_calls == 1  # lookup_grid's own download reused lookup_value's local copy
+
+
+def test_lookup_grid_rejects_an_invalid_kind_for_the_field(tmp_path):
+    with pytest.raises(ValueError, match="percent"):
+        lookup_grid(
             _FakeS3(tmp_path), "bucket", "tas", "percent", 2050, lon=0.0, lat=0.0, work_dir=tmp_path / "work"
         )
 
