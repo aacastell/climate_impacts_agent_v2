@@ -188,26 +188,41 @@ def interpret(
         if not tool_use_blocks:
             break  # plain text, no tool call — model didn't reach a resolution
 
+        # Real bug caught live in production: Bedrock's Converse API requires a toolResult for
+        # *every* toolUse in a turn, in the immediately following turn — no exceptions, confirmed
+        # via a real ValidationException ("Expected toolResult blocks... for the following Ids").
+        # The model can and does call clarify() alongside another tool (e.g. geocode) in the same
+        # turn; returning immediately on hitting clarify — as this used to do — skipped running
+        # the sibling tool and never appended a completing toolResult turn at all, leaving the
+        # trace mid-turn. Any later resume (a real, load-bearing path — see ADR-005's session
+        # design) would then always fail this same validation, not just sometimes.
+        #
+        # Fix: run every tool_use in the turn to completion first (clarify/resolved get a real
+        # placeholder toolResult, not a fabricated scientific value — they have no computation to
+        # run), append the one complete toolResult turn Bedrock requires, *then* act on
+        # clarify/resolved. This also means resuming a clarify() no longer needs to append a
+        # second toolResult for the same id (that pairing is already satisfied) — the user's
+        # answer is just the next normal text turn, see interpret_handler.py's resume path.
         tool_results = []
+        clarify_call = None
+        resolved_call = None
         for tool_use in tool_use_blocks:
             name = tool_use["name"]
             tool_input = tool_use["input"]
 
             if name == "clarify":
-                return {"kind": "clarify", "question": tool_input["question"], "tool_use_id": tool_use["toolUseId"]}
+                clarify_call = tool_use
+                tool_results.append(
+                    {"toolResult": {"toolUseId": tool_use["toolUseId"], "content": [{"json": {"status": "awaiting_user_clarification"}}]}}
+                )
+                continue
 
             if name == "resolved":
-                return {
-                    "kind": "resolved",
-                    "region": {
-                        "name": tool_input["region_name"],
-                        "lon": tool_input["region_lon"],
-                        "lat": tool_input["region_lat"],
-                    },
-                    "crop": tool_input["crop"],
-                    "warmingLevelC": tool_input["warming_level_c"],
-                    "year": tool_input["year"],
-                }
+                resolved_call = tool_use
+                tool_results.append(
+                    {"toolResult": {"toolUseId": tool_use["toolUseId"], "content": [{"json": {"status": "resolved"}}]}}
+                )
+                continue
 
             result = _run_tool(name, tool_input, location_client, location_index_name, gwl_year_table)
             tool_results.append(
@@ -215,6 +230,24 @@ def interpret(
             )
 
         messages.append({"role": "user", "content": tool_results})
+
+        # clarify wins if the model (unexpectedly) called both in the same turn — genuine
+        # ambiguity should never be silently overridden by a premature resolution.
+        if clarify_call is not None:
+            return {"kind": "clarify", "question": clarify_call["input"]["question"], "tool_use_id": clarify_call["toolUseId"]}
+        if resolved_call is not None:
+            tool_input = resolved_call["input"]
+            return {
+                "kind": "resolved",
+                "region": {
+                    "name": tool_input["region_name"],
+                    "lon": tool_input["region_lon"],
+                    "lat": tool_input["region_lat"],
+                },
+                "crop": tool_input["crop"],
+                "warmingLevelC": tool_input["warming_level_c"],
+                "year": tool_input["year"],
+            }
 
     return {
         "kind": "refusal",

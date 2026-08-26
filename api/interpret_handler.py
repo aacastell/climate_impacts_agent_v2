@@ -118,7 +118,14 @@ def interpret(s3, bucket: str, work_dir, http_client, question: str, *, session_
         # arbitrarily-nested Bedrock message trace to Decimal is exactly the kind of fragile
         # workaround worth avoiding — a plain string sidesteps DynamoDB's type system entirely.
         trace = json.loads(item["trace"])
-        trace.append({"role": "user", "content": [{"toolResult": {"toolUseId": item["tool_use_id"], "content": [{"text": answer}]}}]})
+        # A plain text turn, not a toolResult — real bug caught live: orchestrator.py's stored
+        # trace already completes the toolResult turn for every toolUse in the clarify-triggering
+        # assistant turn (including a placeholder for clarify's own toolUseId) before returning,
+        # so that pairing is already satisfied. Appending a second toolResult for the same
+        # toolUseId here was a real, confirmed ValidationException in production ("Expected
+        # toolResult blocks..."). The user's answer to a clarifying question is just the next
+        # normal conversational turn, same as a human's reply would be.
+        trace.append({"role": "user", "content": [{"text": answer}]})
         original_question = item["original_question"]
         request_body = {"question": original_question, "trace": trace}
     else:

@@ -95,15 +95,19 @@ def test_interpret_returns_clarify_without_calling_more_tools():
 
 def test_interpret_resumes_a_clarify_round_trip_from_a_stored_trace():
     # Real regression guard for the query_id/short-lived-store design ADR-005 names — a resumed
-    # call must NOT re-add the original question (it's already in the stored trace) and the
-    # caller's appended toolResult for the pending clarify call must reach the model as the very
-    # next turn, per Bedrock's real toolUse/toolResult pairing requirement.
+    # call must NOT re-add the original question (it's already in the stored trace), and the
+    # trace's shape here matches what production actually produces after the fix for a real,
+    # confirmed-live bug: Bedrock's Converse API requires a toolResult for every toolUse in the
+    # immediately following turn, including clarify's own — orchestrator.py now appends that
+    # placeholder itself before ever returning, so api/interpret_handler.py's resume only needs
+    # to append the user's answer as a normal text turn, not a second toolResult for the same id
+    # (which is what the real ValidationException this was fixed from was caused by).
     stored_trace = [
         {"role": "user", "content": [{"text": "What about Mekong?"}]},
         _tool_use_message("clarify", "t1", {"question": "Did you mean the Vietnamese Mekong Delta?"}),
-        # The caller (api/interpret_handler.py in production) appends this before resuming —
-        # the user's clarifying answer, shaped as the toolResult for the pending clarify call.
-        {"role": "user", "content": [{"toolResult": {"toolUseId": "t1", "content": [{"text": "Yes, the Vietnamese one."}]}}]},
+        {"role": "user", "content": [{"toolResult": {"toolUseId": "t1", "content": [{"json": {"status": "awaiting_user_clarification"}}]}}]},
+        # api/interpret_handler.py's real resume path appends the user's clarifying answer here.
+        {"role": "user", "content": [{"text": "Yes, the Vietnamese one."}]},
     ]
     scripted = [
         _tool_use_message("geocode", "t2", {"region_text": "Mekong Delta, Vietnam"}),
@@ -125,6 +129,42 @@ def test_interpret_resumes_a_clarify_round_trip_from_a_stored_trace():
     first_call_messages = model_client.calls[0]["messages"]
     assert first_call_messages == expected_first_call
     assert result["kind"] == "refusal"  # scripted response doesn't reach a resolution; irrelevant to what this test checks
+
+
+def test_interpret_completes_the_toolresult_turn_when_clarify_fires_alongside_a_sibling_tool():
+    # Real regression guard for a real, confirmed-live production bug: the model can and does
+    # call clarify() alongside another tool (e.g. geocode) in the same turn. Returning
+    # immediately on hitting clarify — the old behavior — skipped running the sibling tool
+    # entirely and left the trace mid-turn with an unanswered toolUse, which made every later
+    # resume attempt fail Bedrock's Converse API with a real ValidationException ("Expected
+    # toolResult blocks..."). The fix: run every tool_use in the turn to completion (a real
+    # result for geocode, a placeholder for clarify's own id — it has no computation to run)
+    # before returning, so the stored trace is always immediately resumable.
+    location_client = _FakeLocationClient(
+        {"Results": [{"Place": {"Label": "Mekong Delta, VNM", "Geometry": {"Point": [106.6, 10.3]}}, "Relevance": 1.0}]}
+    )
+    output_message = {
+        "role": "assistant",
+        "content": [
+            {"toolUse": {"toolUseId": "t1", "name": "geocode", "input": {"region_text": "Mekong"}}},
+            {"toolUse": {"toolUseId": "t2", "name": "clarify", "input": {"question": "Which crop did you mean?"}}},
+        ],
+    }
+    model_client = _ScriptedModelClient([output_message])
+    trace: list = []
+
+    result = interpret(model_client, location_client, "test-index", GWL_YEAR_TABLE, "What about Mekong?", trace=trace)
+
+    assert result == {"kind": "clarify", "question": "Which crop did you mean?", "tool_use_id": "t2"}
+    # The real tool actually ran, not skipped.
+    assert location_client.calls == [{"IndexName": "test-index", "Text": "Mekong", "MaxResults": 5}]
+
+    # The stored trace (interpret() mutates `trace` in place) ends with one complete toolResult
+    # turn answering *both* toolUseIds from the assistant turn — exactly what Bedrock requires
+    # before this trace can ever be resumed.
+    completing_turn = trace[-1]
+    ids_answered = {block["toolResult"]["toolUseId"] for block in completing_turn["content"]}
+    assert ids_answered == {"t1", "t2"}
 
 
 def test_interpret_refuses_when_model_never_reaches_a_resolution():

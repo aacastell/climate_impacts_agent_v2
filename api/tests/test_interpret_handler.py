@@ -166,7 +166,13 @@ def test_interpret_starts_a_session_on_clarify_and_returns_a_query_id():
     assert candidate["lon"] == 105.8
 
 
-def test_interpret_resumes_a_session_by_appending_the_answer_as_a_tool_result():
+def test_interpret_resumes_a_session_by_appending_the_answer_as_a_plain_text_turn():
+    # Real bug fixed live: appending the answer as a second toolResult for clarify's own
+    # toolUseId caused a real, confirmed ValidationException in production ("Expected toolResult
+    # blocks..."). orchestrator.py already completes that toolResult turn itself (a placeholder,
+    # since clarify has no computation to run) before ever returning — see its own comment — so
+    # the stored trace already satisfies Bedrock's requirement, and the resume path only needs to
+    # append the user's answer as a normal next turn, same as a human's reply would be.
     session_table = _FakeSessionTable()
     session_table.put_item(Item={
         "query_id": "abc123",
@@ -176,6 +182,7 @@ def test_interpret_resumes_a_session_by_appending_the_answer_as_a_tool_result():
         "trace": json.dumps([
             {"role": "user", "content": [{"text": "What about Mekong?"}]},
             {"role": "assistant", "content": [{"toolUse": {"toolUseId": "t1", "name": "clarify", "input": {"question": "Which one?"}}}]},
+            {"role": "user", "content": [{"toolResult": {"toolUseId": "t1", "content": [{"json": {"status": "awaiting_user_clarification"}}]}}]},
         ]),
         "tool_use_id": "t1",
         "original_question": "What about Mekong?",
@@ -187,12 +194,10 @@ def test_interpret_resumes_a_session_by_appending_the_answer_as_a_tool_result():
 
     result = interpret(None, "bucket", None, http_client, "ignored on resume", session_table=session_table, query_id="abc123", answer="The Vietnamese one.")
 
-    # The resumed request carries the original question and the full trace with the answer
-    # appended as the pending clarify call's toolResult — not a fresh plain-text follow-up.
     sent = http_client.calls[0]["json"]
     assert sent["question"] == "What about Mekong?"
     last_message = sent["trace"][-1]
-    assert last_message["content"][0]["toolResult"] == {"toolUseId": "t1", "content": [{"text": "The Vietnamese one."}]}
+    assert last_message == {"role": "user", "content": [{"text": "The Vietnamese one."}]}
     # Session is cleaned up once the conversation ends (resolved or refused either way) — not
     # left behind for a conversation that's over.
     assert "abc123" not in session_table.items
