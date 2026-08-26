@@ -24,6 +24,15 @@ function handler(event) {
 # Security headers for a public, security-scanned NASA-branded site. See
 # ADR-001. Deliberately conservative; loosen only for a specific, named
 # requirement (e.g. an embedded map tile provider needing a wider CSP).
+#
+# script-src 'wasm-unsafe-eval': a real, live-caught requirement, not a preemptive loosening —
+# h5wasm (frontend/src/precomputedFetch.ts's real client-side HDF5/NetCDF4 parser, see ADR-004's
+# restored decision) failed outright in production with a real CSP violation
+# ("WebAssembly.instantiate(): ... 'unsafe-eval' is not an allowed source") the moment it was
+# deployed; Vite's local dev server never enforces this header, so nothing local could have
+# caught it. 'wasm-unsafe-eval' is the real, standardized CSP Level 3 keyword scoped specifically
+# to WebAssembly compilation — not the broader 'unsafe-eval', which would also permit eval()/
+# Function() for plain JS, a real, unnecessary security downgrade this doesn't need.
 _SECURITY_HEADERS_FUNCTION_CODE = """
 function handler(event) {
     var response = event.response;
@@ -32,7 +41,7 @@ function handler(event) {
     headers["x-content-type-options"] = { value: "nosniff" };
     headers["x-frame-options"] = { value: "DENY" };
     headers["referrer-policy"] = { value: "strict-origin-when-cross-origin" };
-    headers["content-security-policy"] = { value: "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; connect-src 'self'" };
+    headers["content-security-policy"] = { value: "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; connect-src 'self'" };
     return response;
 }
 """

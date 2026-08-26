@@ -64,6 +64,19 @@ def test_distribution_has_two_cloudfront_functions():
     _template().resource_count_is("AWS::CloudFront::Function", 2)
 
 
+def test_csp_allows_webassembly_compilation():
+    # Real bug caught live in production, not a preemptive loosening: h5wasm (the real
+    # client-side HDF5/NetCDF4 parser ADR-004's restored decision depends on — see
+    # frontend/src/precomputedFetch.ts) failed outright with a real CSP violation the moment it
+    # was deployed ("WebAssembly.instantiate(): ... 'unsafe-eval' is not an allowed source"),
+    # because Vite's local dev server never enforces this header. 'wasm-unsafe-eval' specifically
+    # — not the broader 'unsafe-eval', which would also permit eval()/Function() for plain JS.
+    resources = _template().to_json()["Resources"]
+    functions = [r for r in resources.values() if r["Type"] == "AWS::CloudFront::Function"]
+    security_headers_fn = next(f for f in functions if "wasm-unsafe-eval" in f["Properties"]["FunctionCode"])
+    assert "'unsafe-eval'" not in security_headers_fn["Properties"]["FunctionCode"].replace("'wasm-unsafe-eval'", "")
+
+
 def test_distribution_has_an_api_path_behavior():
     """A third origin/behavior for /api/* — the API tier (ApiStack), same distribution as the
     frontend per ADR-001, so the browser never makes a cross-origin call."""
